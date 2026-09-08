@@ -1,0 +1,16 @@
+{
+    "cmake.useCMakePresets": "always",
+    "cmake.configureOnOpen": false,
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "cSpell.words": [
+        "Sanek",
+        "JUCE",
+        "Ableton",
+        "Snek",
+        "SCFd",
+        "SanekChordFinder",
+        "chroma",
+        "juceaide",
+        "subharmonic"
+    ]
+}

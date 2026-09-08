@@ -1,0 +1,54 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Configure Sanek Chord Finder",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$ErrorActionPreference = 'Stop'; $cmake = (Get-Command cmake.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Path; if (-not $cmake) { $cmake = Join-Path $env:ProgramFiles 'CMake\\bin\\cmake.exe' }; if (-not (Test-Path -LiteralPath $cmake -PathType Leaf)) { throw 'CMake not found. Restart VS Code and check Get-Command cmake.exe in PowerShell.' }; Write-Host ('CMake: ' + $cmake); & $cmake --preset windows-msvc; exit $LASTEXITCODE"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "echo": false,
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Build Sanek Chord Finder VST3",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$ErrorActionPreference = 'Stop'; $cmake = (Get-Command cmake.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Path; if (-not $cmake) { $cmake = Join-Path $env:ProgramFiles 'CMake\\bin\\cmake.exe' }; if (-not (Test-Path -LiteralPath $cmake -PathType Leaf)) { throw 'CMake not found. Restart VS Code and check Get-Command cmake.exe in PowerShell.' }; Write-Host ('CMake: ' + $cmake); & $cmake --build --preset windows-release; exit $LASTEXITCODE"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "Configure Sanek Chord Finder",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "presentation": {
+                "echo": false,
+                "reveal": "always",
+                "panel": "shared"
+            }
+        }
+    ]
+}
