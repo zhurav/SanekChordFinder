@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(SanekChordFinder VERSION 0.2.0 LANGUAGES C CXX)
+project(SanekChordFinder VERSION 0.3.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -14,6 +14,9 @@ if(SANEKCHORD_TESTS_ONLY)
     add_executable(SpectrumChromaTests Tests/SpectrumChromaTests.cpp)
     target_include_directories(SpectrumChromaTests PRIVATE Source)
     add_test(NAME SpectrumChroma COMMAND SpectrumChromaTests)
+    add_executable(TempoTrackerTests Tests/TempoTrackerTests.cpp)
+    target_include_directories(TempoTrackerTests PRIVATE Source)
+    add_test(NAME TempoTracker COMMAND TempoTrackerTests)
     return()
 endif()
 
@@ -63,6 +66,7 @@ juce_add_plugin(SanekChordFinder
 target_sources(SanekChordFinder PRIVATE
     Source/ChordMatcher.h
     Source/SpectrumChroma.h
+    Source/TempoTracker.h
     Source/ChordAnalyzer.h
     Source/PluginProcessor.h
     Source/PluginProcessor.cpp

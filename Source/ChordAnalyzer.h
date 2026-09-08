@@ -3,6 +3,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include "ChordMatcher.h"
 #include "SpectrumChroma.h"
+#include "TempoTracker.h"
 
 struct AnalysisTiming
 {
@@ -43,6 +44,7 @@ public:
         smoothingAlpha = static_cast<float>(1.0 - std::exp(-hopSize / (sampleRate * 0.12)));
         stableFramesRequired = std::max(6, static_cast<int>(std::ceil(0.36 * sampleRate / hopSize)));
         noChordFramesRequired = std::max(12, static_cast<int>(std::ceil(sampleRate / hopSize)));
+        tempoTracker.prepare(sampleRate);
         reset();
     }
 
@@ -56,12 +58,18 @@ public:
         hasAnalysed = false;
         pendingChord = -1;
         pendingFrames = 0;
+        pendingTiming = {};
         noChordFrames = 0;
         stableChord = -1;
         smoothedChroma.fill(0.0f);
         rememberedChordByRoot.fill(-1);
         hasSmoothedChroma = false;
+        tempoTracker.reset();
     }
+
+    void setBeatsPerBar(int beats) noexcept { tempoTracker.setBeatsPerBar(beats); }
+    void markNewBar() noexcept { tempoTracker.markNewBar(); }
+    TempoState getTempoState() const noexcept { return tempoTracker.getState(); }
 
     template <typename Callback>
     void process(const juce::AudioBuffer<float>& buffer, float sensitivity,
@@ -77,6 +85,7 @@ public:
             for (int channel = 0; channel < channels; ++channel)
                 mono += buffer.getReadPointer(channel)[sample];
             mono /= static_cast<float>(channels);
+            tempoTracker.processSample(mono);
             ring[static_cast<size_t>(writePosition)] = std::isfinite(mono) ? mono : 0.0f;
             writePosition = (writePosition + 1) % fftSize;
             filled = std::min(fftSize, filled + 1);
@@ -155,14 +164,22 @@ private:
             {
                 pendingChord = candidateChord;
                 pendingFrames = 1;
+                pendingTiming = timing;
             }
+            auto resultTiming = timing;
             if (pendingFrames >= stableFramesRequired && stableChord != pendingChord)
             {
                 stableChord = pendingChord;
                 changed = true;
+                resultTiming = pendingTiming;
                 if (raw.chord == stableChord)
                     rememberedChordByRoot[static_cast<size_t>(stableChord % 12)] = stableChord;
             }
+
+            const float displayConfidence = candidateChord == stableChord ? candidateConfidence
+                                                        : std::min(candidateConfidence, 35.0f);
+            return { stableChord, candidateAlternative, displayConfidence, changed, resultTiming,
+                     smoothedChroma };
         }
 
         const float displayConfidence = candidateChord == stableChord ? candidateConfidence
@@ -232,6 +249,7 @@ private:
     juce::dsp::FFT fft;
     juce::dsp::WindowingFunction<float> window;
     ChordMatcher matcher;
+    TempoTracker tempoTracker;
     std::array<float, fftSize> ring {};
     std::array<float, fftSize * 2> fftData {};
     std::array<float, 12> smoothedChroma {};
@@ -240,6 +258,7 @@ private:
     float smoothingAlpha = 0.30f;
     int writePosition = 0, filled = 0, samplesSinceAnalysis = 0;
     int pendingChord = -1, pendingFrames = 0, noChordFrames = 0, stableChord = -1;
+    AnalysisTiming pendingTiming;
     int stableFramesRequired = 9, noChordFramesRequired = 24;
     bool hasAnalysed = false, hasSmoothedChroma = false;
 };

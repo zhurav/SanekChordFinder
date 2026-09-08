@@ -27,6 +27,7 @@ int main(int argc, char** argv)
     const int channels = static_cast<int>(std::min<juce::uint64>(2, reader->numChannels));
     juce::AudioBuffer<float> buffer(std::max(1, channels), blockSize);
     int lastPrintedChord = -1;
+    bool tempoLockPrinted = false;
     for (juce::int64 position = 0; position < reader->lengthInSamples; position += blockSize)
     {
         const int samples = static_cast<int>(std::min<juce::int64>(
@@ -44,6 +45,21 @@ int main(int argc, char** argv)
                           << ChordMatcher::name(frame.chord) << '\n';
             }
         });
+        const auto liveTempo = analyzer.getTempoState();
+        if (liveTempo.locked && !tempoLockPrinted)
+        {
+            tempoLockPrinted = true;
+            std::cerr << std::fixed << std::setprecision(1)
+                      << "TEMPO_LOCK " << liveTempo.bpm << " BPM at "
+                      << liveTempo.currentSeconds << " s, confidence "
+                      << liveTempo.confidence << "%\n";
+        }
     }
+    const auto tempo = analyzer.getTempoState();
+    std::cerr << std::fixed << std::setprecision(1)
+              << "AUTO_BPM " << tempo.bpm
+              << "  CONFIDENCE " << tempo.confidence
+              << "%  " << (tempo.locked ? "LOCKED" : "LEARNING")
+              << "  BAR " << tempo.bar << "  BEAT " << tempo.beat << '\n';
     return 0;
 }

@@ -13,6 +13,12 @@ struct ChordEvent
     float beat = -1.0f;
 };
 
+struct InternalGridPosition
+{
+    int bar = -1;
+    int beat = -1;
+};
+
 class SanekChordFinderAudioProcessor final : public juce::AudioProcessor
 {
 public:
@@ -47,6 +53,18 @@ public:
     std::array<float, 12> getChroma() const noexcept;
     std::vector<ChordEvent> getHistorySnapshot() const;
     void clearHistory() noexcept;
+    void requestNewBar() noexcept;
+    float getAutoBpm() const noexcept { return autoBpm.load(std::memory_order_relaxed); }
+    float getTempoConfidence() const noexcept
+    {
+        return tempoConfidence.load(std::memory_order_relaxed);
+    }
+    bool isTempoLocked() const noexcept { return tempoLocked.load(std::memory_order_relaxed); }
+    int getCurrentBar() const noexcept { return currentBar.load(std::memory_order_relaxed); }
+    int getCurrentBeat() const noexcept { return currentBeat.load(std::memory_order_relaxed); }
+    int getBeatsPerBar() const noexcept { return currentBeatsPerBar.load(std::memory_order_relaxed); }
+    float getBeatPhase() const noexcept { return beatPhase.load(std::memory_order_relaxed); }
+    InternalGridPosition getInternalPosition(double seconds) const noexcept;
 
     juce::AudioProcessorValueTreeState parameters;
 
@@ -71,14 +89,20 @@ private:
     ChordAnalyzer analyzer;
     std::atomic<float>* listening = nullptr;
     std::atomic<float>* sensitivity = nullptr;
+    std::atomic<float>* meter = nullptr;
     std::atomic<int> currentChord { -1 }, alternativeChord { -1 };
     std::atomic<float> confidence { 0.0f };
     std::array<std::atomic<float>, 12> latestChroma;
     std::array<HistorySlot, historyCapacity> history;
     std::atomic<juce::uint64> historyCount { 0 }, historyStart { 0 };
     std::atomic<int> lastHistoryChord { -1 };
+    std::atomic<float> autoBpm { 0.0f }, tempoConfidence { 0.0f }, beatPhase { 0.0f };
+    std::atomic<double> tempoOriginSeconds { -1.0 };
+    std::atomic<int> currentBar { -1 }, currentBeat { -1 }, currentBeatsPerBar { 4 };
+    std::atomic<bool> tempoLocked { false }, newBarRequested { false };
+    std::atomic<bool> alignNextChordToBarOrigin { true };
     double sampleRateHz = 48000.0;
-    juce::int64 processedSamples = 0;
+    juce::int64 listeningSamples = 0;
     bool wasListening = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SanekChordFinderAudioProcessor)

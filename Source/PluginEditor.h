@@ -23,25 +23,38 @@ private:
     void timerCallback() override;
     void refreshHistory();
     juce::String buildSequence() const;
-    static juce::String eventPosition(const ChordEvent&);
+    juce::String eventPosition(const ChordEvent&) const;
 
     SanekChordFinderAudioProcessor& processor;
     ChordFinderLookAndFeel look;
     juce::ToggleButton listeningButton { "START LISTENING" };
     juce::Slider sensitivityKnob;
     juce::Label sensitivityLabel;
+    juce::ComboBox meterBox;
+    juce::Label meterLabel;
     juce::Label currentChordLabel;
     juce::Label confidenceLabel;
     juce::Label alternativeLabel;
+    juce::Label bpmLabel;
     juce::TextEditor historyBox;
+    juce::TextButton newBarButton { "NEW BAR" };
     juce::TextButton clearButton { "CLEAR" };
     juce::TextButton copyButton { "COPY SEQUENCE" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> listeningAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sensitivityAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> meterAttachment;
     std::vector<ChordEvent> displayedEvents;
     std::array<float, 12> displayedChroma {};
     float displayedConfidence = 0.0f;
+    float displayedBpm = 0.0f;
+    float displayedBeatPhase = 0.0f;
+    float historyBpm = -1.0f;
     int displayedChord = -1;
+    int displayedBar = -1;
+    int displayedBeat = -1;
+    int displayedBeatsPerBar = 4;
+    bool displayedTempoLocked = false;
+    bool historyTempoLocked = false;
     juce::TooltipWindow tooltips { this, 500 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SanekChordFinderAudioProcessorEditor)
