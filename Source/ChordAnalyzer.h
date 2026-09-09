@@ -85,10 +85,17 @@ public:
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
             float mono = 0.0f;
+            double tempoEnergy = 0.0;
             for (int channel = 0; channel < channels; ++channel)
-                mono += buffer.getReadPointer(channel)[sample];
+            {
+                const float input = buffer.getReadPointer(channel)[sample];
+                const float safe = std::isfinite(input) ? input : 0.0f;
+                mono += safe;
+                tempoEnergy += static_cast<double>(safe) * safe;
+            }
             mono /= static_cast<float>(channels);
-            tempoTracker.processSample(mono);
+            // Measure channel energy so opposite-polarity stereo cannot cancel the rhythm.
+            tempoTracker.processSample(static_cast<float>(std::sqrt(tempoEnergy / channels)));
             ring[static_cast<size_t>(writePosition)] = std::isfinite(mono) ? mono : 0.0f;
             writePosition = (writePosition + 1) % fftSize;
             filled = std::min(fftSize, filled + 1);
@@ -181,6 +188,7 @@ private:
                 stableChord = pendingChord;
                 changed = true;
                 resultTiming = pendingTiming;
+                resultTiming.seconds = tempoTracker.attackBefore(pendingTiming.seconds);
                 if (raw.chord == stableChord
                     && ChordMatcher::isBasicMajorOrMinor(stableChord))
                     rememberedChordByRoot[static_cast<size_t>(ChordMatcher::rootOf(stableChord))]

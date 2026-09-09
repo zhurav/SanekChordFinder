@@ -61,9 +61,10 @@ void ChordFinderLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, i
 
 SanekChordFinderAudioProcessorEditor::SanekChordFinderAudioProcessorEditor(
     SanekChordFinderAudioProcessor& owner)
-    : AudioProcessorEditor(&owner), processor(owner)
+    : AudioProcessorEditor(&owner), processor(owner), trackEditor(owner)
 {
     setLookAndFeel(&look);
+    addAndMakeVisible(trackEditor);
 
     listeningButton.setTooltip("Start or stop chord detection. Audio always passes through unchanged.");
     addAndMakeVisible(listeningButton);
@@ -128,6 +129,7 @@ SanekChordFinderAudioProcessorEditor::SanekChordFinderAudioProcessorEditor(
     keyLabel.setTooltip("Estimated key, confidence and the current chord's harmonic degree. The estimate improves as more different chords arrive.");
     addAndMakeVisible(keyLabel);
     bpmLabel.setFont(uiFont(13.0f, true));
+    bpmLabel.setTooltip("Current tempo measured from incoming audio only. Ableton BPM is never read. The bar grid keeps its first confirmed tempo; restart Listening for a new grid.");
     bpmLabel.setColour(juce::Label::textColourId, cyan);
     bpmLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(bpmLabel);
@@ -179,8 +181,8 @@ SanekChordFinderAudioProcessorEditor::SanekChordFinderAudioProcessorEditor(
     };
     addAndMakeVisible(copyButton);
 
-    setSize(820, 610);
-    refreshHistory();
+    setSize(820, 900);
+    timerCallback();
     startTimerHz(20);
 }
 
@@ -248,7 +250,7 @@ void SanekChordFinderAudioProcessorEditor::paint(juce::Graphics& g)
     else
     {
         g.setColour(muted);
-        g.drawText("TEMPO LEARNING NEEDS ABOUT 7 SECONDS", 55, 382, 330, 18,
+        g.drawText("AUTO TEMPO: LISTENING FOR A STEADY RHYTHM", 55, 382, 420, 18,
                    juce::Justification::centredLeft);
     }
 
@@ -273,7 +275,7 @@ void SanekChordFinderAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(muted);
     g.setFont(uiFont(11.0f));
     g.drawText("PITCH CLASSES", 32, 556, 200, 18, juce::Justification::centredLeft);
-    g.drawText("v0.5", 730, 582, 64, 18, juce::Justification::centredRight);
+    g.drawText("v0.6.2 Chord Track", 630, 878, 164, 18, juce::Justification::centredRight);
 }
 
 void SanekChordFinderAudioProcessorEditor::resized()
@@ -294,6 +296,7 @@ void SanekChordFinderAudioProcessorEditor::resized()
     historyBox.setBounds(541, 157, 238, 335);
     clearButton.setBounds(541, 510, 90, 31);
     copyButton.setBounds(642, 510, 137, 31);
+    trackEditor.setBounds(25, 585, 770, 290);
 }
 
 void SanekChordFinderAudioProcessorEditor::timerCallback()
@@ -320,11 +323,12 @@ void SanekChordFinderAudioProcessorEditor::timerCallback()
     displayedBar = processor.getCurrentBar();
     displayedBeat = processor.getCurrentBeat();
     displayedBeatsPerBar = processor.getBeatsPerBar();
-    bpmLabel.setText(displayedTempoLocked
-        ? "AUTO BPM  " + juce::String(displayedBpm, 1) + "     LOCKED  "
-            + juce::String(processor.getTempoConfidence(), 0) + "%"
-        : (active ? "AUTO BPM     LEARNING..." : "AUTO BPM     STOPPED"),
-        juce::dontSendNotification);
+    const bool hasLiveTempo = active && processor.getLiveBpm() > 0.0f;
+    const float audibleBpm = hasLiveTempo ? processor.getLiveBpm() : processor.getLastHeardBpm();
+    bpmLabel.setText(audibleBpm > 0.0f
+        ? "AUTO BPM  " + juce::String(audibleBpm, 1)
+            + (hasLiveTempo ? "   " + juce::String(processor.getLiveTempoConfidence(), 0) + "%" : "   LAST HEARD")
+        : (active ? "AUTO BPM  LISTENING FOR RHYTHM..." : "AUTO BPM  --"), juce::dontSendNotification);
     newBarButton.setEnabled(active);
     refreshHistory();
     if (displayedKey.key >= 0)

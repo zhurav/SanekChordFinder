@@ -53,11 +53,17 @@ int main()
             }
         std::cout << "PASS: 90/120/150 BPM at 44.1/48/96 kHz\n";
 
+        const auto early = runClickTrack(48000.0, 120.0f, 3.1);
+        require(!early.locked && std::abs(early.estimatedBpm - 120.0f) < 1.5f,
+                "Audible tempo must be available before grid confirmation");
+        std::cout << "PASS: early estimate without manual BPM\n";
+
         TempoTracker silence;
         silence.prepare(48000.0);
         for (int sample = 0; sample < 48000 * 10; ++sample)
             silence.processSample(0.0f);
         require(!silence.getState().locked, "Silence must not produce a tempo");
+        require(silence.getState().estimatedBpm == 0.0f, "Silence must not produce a live estimate");
         std::cout << "PASS: silence rejection and internal bar position\n";
 
         TempoTracker fixedTempo;
@@ -70,11 +76,19 @@ int main()
                 "Initial tempo did not lock at 120 BPM");
         require(std::abs(afterPush.bpm - initiallyLocked.bpm) < 0.01f,
                 "Locked tempo must not chase performance changes");
+        require(std::abs(afterPush.estimatedBpm - 150.0f) < 1.5f,
+                "Live estimate must follow the newly audible rhythm after grid confirmation");
         fixedTempo.markNewBar();
         const auto marked = fixedTempo.getState();
         require(marked.bar == 1 && marked.beat == 1,
                 "Manual new-bar marker did not reset the internal grid");
         std::cout << "PASS: locked tempo stability and manual new-bar marker\n";
+        for (int sample = 0; sample < 48000 * 3; ++sample) fixedTempo.processSample(0.0f);
+        require(fixedTempo.getState().estimatedBpm == 0.0f, "Live estimate must clear when rhythm disappears");
+        require(fixedTempo.getState().locked, "Silence must not move the recorded grid");
+        fixedTempo.reset();
+        require(fixedTempo.getState().estimatedBpm == 0.0f && !fixedTempo.getState().locked,
+                "New listening starts fresh audio analysis");
         return 0;
     }
     catch (const std::exception& e)

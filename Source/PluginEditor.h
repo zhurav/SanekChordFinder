@@ -2,6 +2,7 @@
 
 #include "PluginProcessor.h"
 #include "KeyDetector.h"
+#include "ChordTrackEditor.h"
 
 class ChordFinderLookAndFeel final : public juce::LookAndFeel_V4
 {
@@ -28,6 +29,7 @@ private:
 
     SanekChordFinderAudioProcessor& processor;
     ChordFinderLookAndFeel look;
+    ChordTrackEditor trackEditor;
     juce::ToggleButton listeningButton { "START LISTENING" };
     juce::Slider sensitivityKnob;
     juce::Label sensitivityLabel;

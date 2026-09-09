@@ -45,6 +45,8 @@ void SanekChordFinderAudioProcessor::prepareToPlay(double rate, int maximumBlock
     alternativeChord.store(-1, std::memory_order_relaxed);
     confidence.store(0.0f, std::memory_order_relaxed);
     autoBpm.store(0.0f, std::memory_order_relaxed);
+    liveBpm.store(0.0f, std::memory_order_relaxed);
+    liveTempoConfidence.store(0.0f, std::memory_order_relaxed);
     tempoConfidence.store(0.0f, std::memory_order_relaxed);
     tempoLocked.store(false, std::memory_order_relaxed);
     tempoOriginSeconds.store(-1.0, std::memory_order_relaxed);
@@ -74,6 +76,15 @@ void SanekChordFinderAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     const bool active = isListening();
     if (active && !wasListening)
     {
+        clearHistory();
+        recordedBpm.store(0.0);
+        exportBpm.store(0.0);
+        recordedEndSeconds.store(0.0);
+        recordedOrigin.store(-1.0);
+        lastHeardBpm.store(0.0f);
+        liveBpm.store(0.0f);
+        liveTempoConfidence.store(0.0f);
+        tempoOriginSeconds.store(-1.0, std::memory_order_relaxed);
         analyzer.reset();
         listeningSamples = 0;
         newBarRequested.store(false, std::memory_order_relaxed);
@@ -112,10 +123,31 @@ void SanekChordFinderAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
                                      std::memory_order_relaxed);
         }
         const auto timing = readTiming();
+        for (int sample = buffer.getNumSamples() - 1; sample >= 0; --sample)
+        {
+            bool audible = false;
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                audible |= std::abs(buffer.getSample(channel, sample)) > 0.0001f;
+            if (audible)
+            {
+                recordedEndSeconds.store((static_cast<double>(listeningSamples) + sample + 1.0) / sampleRateHz);
+                break;
+            }
+        }
         analyzer.process(buffer, sensitivity->load(std::memory_order_relaxed), timing,
                          [this](const ChordFrame& frame) noexcept { receiveFrame(frame); });
         listeningSamples += buffer.getNumSamples();
         const auto tempo = analyzer.getTempoState();
+        exportBpm.store(tempo.exportBpm);
+        liveBpm.store(tempo.estimatedBpm, std::memory_order_relaxed);
+        liveTempoConfidence.store(tempo.estimatedConfidence, std::memory_order_relaxed);
+        if (tempo.estimatedBpm > 0.0f)
+            lastHeardBpm.store(tempo.estimatedBpm, std::memory_order_relaxed);
+        if (tempo.locked)
+        {
+            recordedBpm.store(tempo.bpm);
+            recordedOrigin.store(tempo.originSeconds);
+        }
         autoBpm.store(tempo.bpm, std::memory_order_relaxed);
         tempoConfidence.store(tempo.confidence, std::memory_order_relaxed);
         tempoLocked.store(tempo.locked, std::memory_order_relaxed);
@@ -252,14 +284,54 @@ juce::AudioProcessorEditor* SanekChordFinderAudioProcessor::createEditor()
 void SanekChordFinderAudioProcessor::getStateInformation(juce::MemoryBlock& destination)
 {
     if (auto xml = parameters.copyState().createXml())
+    {
+        const auto track = getChordTrack();
+        auto* saved = xml->createNewChildElement("ChordTrack");
+        saved->setAttribute("bpm", track.bpm);
+        saved->setAttribute("meter", track.meter);
+        saved->setAttribute("duration", track.duration);
+        saved->setAttribute("recordedEndBeat", track.recordedEndBeat);
+        for (const auto& row : track.rows)
+        {
+            auto* item = saved->createNewChildElement("Chord");
+            item->setAttribute("id", row.chord);
+            item->setAttribute("beat", row.beat);
+        }
         copyXmlToBinary(*xml, destination);
+    }
 }
 
 void SanekChordFinderAudioProcessor::setStateInformation(const void* data, int size)
 {
     if (auto xml = getXmlFromBinary(data, size))
         if (xml->hasTagName(parameters.state.getType()))
+        {
+            ChordTrack track;
+            if (const auto* saved = xml->getChildByName("ChordTrack"))
+            {
+                track.bpm = saved->getDoubleAttribute("bpm", 120.0);
+                track.meter = saved->getIntAttribute("meter", 4);
+                track.duration = saved->getIntAttribute("duration", 2);
+                track.recordedEndBeat = saved->getDoubleAttribute("recordedEndBeat", -1.0);
+                if (!std::isfinite(track.recordedEndBeat) || track.recordedEndBeat > 100004.0)
+                    track.recordedEndBeat = -1.0;
+                for (auto* item = saved->getFirstChildElement(); item != nullptr && track.rows.size() < 128;
+                     item = item->getNextElement())
+                {
+                    const int chord = item->getIntAttribute("id", -1);
+                    const double beat = item->getDoubleAttribute("beat", -1.0);
+                    if (item->hasTagName("Chord") && ChordMatcher::isValid(chord)
+                        && std::isfinite(beat) && beat >= 0.0 && beat <= 100000.0)
+                        track.rows.push_back({ chord, std::round(beat) });
+                }
+                if (!std::isfinite(track.bpm) || track.bpm < 30.0 || track.bpm > 300.0) track.bpm = 120.0;
+                if (track.meter != 3 && track.meter != 4 && track.meter != 6) track.meter = 4;
+                track.duration = juce::jlimit(0, 3, track.duration);
+            }
+            setChordTrack(track);
+            xml->deleteAllChildElementsWithTagName("ChordTrack");
             parameters.replaceState(juce::ValueTree::fromXml(*xml));
+        }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

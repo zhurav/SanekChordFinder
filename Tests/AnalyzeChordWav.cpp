@@ -62,6 +62,7 @@ int main(int argc, char** argv)
     const auto tempo = analyzer.getTempoState();
     std::cerr << std::fixed << std::setprecision(1)
               << "AUTO_BPM " << tempo.bpm
+              << " EXPORT_BPM " << tempo.exportBpm
               << "  CONFIDENCE " << tempo.confidence
               << "%  " << (tempo.locked ? "LOCKED" : "LEARNING")
               << "  BAR " << tempo.bar << "  BEAT " << tempo.beat << '\n';

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(SanekChordFinder VERSION 0.5.0 LANGUAGES C CXX)
+project(SanekChordFinder VERSION 0.6.2 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -68,6 +68,10 @@ juce_add_plugin(SanekChordFinder
 
 target_sources(SanekChordFinder PRIVATE
     Source/ChordMatcher.h
+    Source/ChordTrack.h
+    Source/ChordMidi.h
+    Source/ChordTrackEditor.h
+    Source/ChordTrackEditor.cpp
     Source/KeyDetector.h
     Source/SpectrumChroma.h
     Source/TempoTracker.h
@@ -92,6 +96,17 @@ endif()
 
 if(SANEKCHORD_BUILD_ANALYZER_TESTS)
     enable_testing()
+    add_executable(ChordMidiTests Tests/ChordMidiTests.cpp)
+    target_include_directories(ChordMidiTests PRIVATE Source)
+    target_link_libraries(ChordMidiTests PRIVATE juce::juce_audio_basics)
+    add_test(NAME ChordMidi COMMAND ChordMidiTests)
+    add_executable(ChordTrackIntegrationTests Tests/ChordTrackIntegrationTests.cpp)
+    target_include_directories(ChordTrackIntegrationTests PRIVATE Source)
+    target_link_libraries(ChordTrackIntegrationTests PRIVATE SanekChordFinder juce::juce_audio_processors juce::juce_dsp)
+    add_test(NAME ChordTrackIntegration COMMAND ChordTrackIntegrationTests)
+    add_executable(ExportChordWav Tests/ExportChordWav.cpp)
+    target_include_directories(ExportChordWav PRIVATE Source)
+    target_link_libraries(ExportChordWav PRIVATE SanekChordFinder juce::juce_audio_processors juce::juce_dsp)
     add_executable(ChordAnalyzerTests Tests/ChordAnalyzerTests.cpp)
     target_include_directories(ChordAnalyzerTests PRIVATE Source)
     target_link_libraries(ChordAnalyzerTests PRIVATE juce::juce_dsp)

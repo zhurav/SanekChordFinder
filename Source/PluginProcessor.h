@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "ChordAnalyzer.h"
+#include "ChordTrack.h"
 
 struct ChordEvent
 {
@@ -55,6 +56,9 @@ public:
     void clearHistory() noexcept;
     void requestNewBar() noexcept;
     float getAutoBpm() const noexcept { return autoBpm.load(std::memory_order_relaxed); }
+    float getLiveBpm() const noexcept { return liveBpm.load(std::memory_order_relaxed); }
+    float getLastHeardBpm() const noexcept { return lastHeardBpm.load(std::memory_order_relaxed); }
+    float getLiveTempoConfidence() const noexcept { return liveTempoConfidence.load(std::memory_order_relaxed); }
     float getTempoConfidence() const noexcept
     {
         return tempoConfidence.load(std::memory_order_relaxed);
@@ -65,6 +69,13 @@ public:
     int getBeatsPerBar() const noexcept { return currentBeatsPerBar.load(std::memory_order_relaxed); }
     float getBeatPhase() const noexcept { return beatPhase.load(std::memory_order_relaxed); }
     InternalGridPosition getInternalPosition(double seconds) const noexcept;
+    double getRecordedBpm() const noexcept { return recordedBpm.load(); }
+    double getExportBpm() const noexcept { return exportBpm.load(); }
+    double getRecordedEndSeconds() const noexcept { return recordedEndSeconds.load(); }
+    double getRecordedOrigin() const noexcept { return recordedOrigin.load(); }
+    ChordTrack getChordTrack() const { const juce::ScopedLock lock(trackLock); return chordTrack; }
+    void setChordTrack(const ChordTrack& value) { const juce::ScopedLock lock(trackLock); chordTrack = value; ++trackRevision; }
+    unsigned getTrackRevision() const noexcept { return trackRevision.load(); }
 
     juce::AudioProcessorValueTreeState parameters;
 
@@ -98,6 +109,7 @@ private:
     std::atomic<juce::uint64> historyCount { 0 }, historyStart { 0 };
     std::atomic<int> lastHistoryChord { -1 };
     std::atomic<float> autoBpm { 0.0f }, tempoConfidence { 0.0f }, beatPhase { 0.0f };
+    std::atomic<float> liveBpm { 0.0f }, lastHeardBpm { 0.0f }, liveTempoConfidence { 0.0f };
     std::atomic<double> tempoOriginSeconds { -1.0 };
     std::atomic<int> currentBar { -1 }, currentBeat { -1 }, currentBeatsPerBar { 4 };
     std::atomic<bool> tempoLocked { false }, newBarRequested { false };
@@ -105,6 +117,12 @@ private:
     double sampleRateHz = 48000.0;
     juce::int64 listeningSamples = 0;
     bool wasListening = false;
+    std::atomic<double> recordedBpm { 0.0 }, recordedOrigin { -1.0 };
+    std::atomic<double> exportBpm { 0.0 };
+    std::atomic<double> recordedEndSeconds { 0.0 };
+    mutable juce::CriticalSection trackLock;
+    ChordTrack chordTrack;
+    std::atomic<unsigned> trackRevision { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SanekChordFinderAudioProcessor)
 };
