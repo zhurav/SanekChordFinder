@@ -127,6 +127,26 @@ int main()
     expect(track.endBeat(2) == 16 && track.endBeat(5) == 32,
            "two-bar chords last until the next change and final bar end");
     roundTrip(track);
+    ChordTrack screenshotCase;
+    screenshotCase.rows = {{21,0}, {0,56}, {16,59}, {21,67}, {0,71}, {16,76}};
+    screenshotCase.recordedEndBeat = 80;
+    expect(screenshotCase.keepOneLoop(), "repeated screenshot progression is recognised as one loop");
+    expect(screenshotCase.rows.size() == 3 && screenshotCase.recordedEndBeat == 68,
+           "one-loop mode removes repeated chord events");
+    ChordTrack cleanLoop;
+    cleanLoop.rows = {{21,0}, {0,4}, {16,8}, {21,16}, {0,20}, {16,24}};
+    cleanLoop.recordedEndBeat = 32;
+    expect(cleanLoop.keepOneLoop() && cleanLoop.rows.size() == 3 && cleanLoop.recordedEndBeat == 16,
+           "clean two-pass loop exports exactly one 4-bar cycle");
+    ChordTrack fullTake;
+    fullTake.scope = 1;
+    fullTake.rows = cleanLoop.rows;
+    fullTake.rows.insert(fullTake.rows.end(), {{21,16}, {0,20}, {16,24}});
+    expect(!fullTake.keepOneLoop() && fullTake.rows.size() == 6, "full-take mode retains repetitions");
+    ChordTrack unfinished;
+    unfinished.rows = {{21,0}, {0,4}, {16,8}, {21,16}, {0,20}};
+    expect(!unfinished.keepOneLoop() && unfinished.rows.size() == 5,
+           "incomplete second pass is not mistaken for a complete loop");
     std::cout << (failures == 0 ? "All Chord MIDI tests passed.\n" : "Chord MIDI tests failed.\n");
     return failures == 0 ? 0 : 1;
 }

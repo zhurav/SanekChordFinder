@@ -55,7 +55,7 @@ void SanekChordFinderAudioProcessor::prepareToPlay(double rate, int maximumBlock
     currentBeatsPerBar.store(4, std::memory_order_relaxed);
     beatPhase.store(0.0f, std::memory_order_relaxed);
     newBarRequested.store(false, std::memory_order_relaxed);
-    alignNextChordToBarOrigin.store(true, std::memory_order_relaxed);
+    alignNextChordToBarOrigin.store(false, std::memory_order_relaxed);
 }
 
 bool SanekChordFinderAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -88,7 +88,7 @@ void SanekChordFinderAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         analyzer.reset();
         listeningSamples = 0;
         newBarRequested.store(false, std::memory_order_relaxed);
-        alignNextChordToBarOrigin.store(true, std::memory_order_relaxed);
+        alignNextChordToBarOrigin.store(false, std::memory_order_relaxed);
     }
     if (!active && wasListening)
     {
@@ -291,6 +291,7 @@ void SanekChordFinderAudioProcessor::getStateInformation(juce::MemoryBlock& dest
         saved->setAttribute("meter", track.meter);
         saved->setAttribute("duration", track.duration);
         saved->setAttribute("recordedEndBeat", track.recordedEndBeat);
+        saved->setAttribute("scope", track.scope);
         for (const auto& row : track.rows)
         {
             auto* item = saved->createNewChildElement("Chord");
@@ -313,6 +314,7 @@ void SanekChordFinderAudioProcessor::setStateInformation(const void* data, int s
                 track.meter = saved->getIntAttribute("meter", 4);
                 track.duration = saved->getIntAttribute("duration", 2);
                 track.recordedEndBeat = saved->getDoubleAttribute("recordedEndBeat", -1.0);
+                track.scope = saved->getIntAttribute("scope", 0);
                 if (!std::isfinite(track.recordedEndBeat) || track.recordedEndBeat > 100004.0)
                     track.recordedEndBeat = -1.0;
                 for (auto* item = saved->getFirstChildElement(); item != nullptr && track.rows.size() < 128;
@@ -327,6 +329,7 @@ void SanekChordFinderAudioProcessor::setStateInformation(const void* data, int s
                 if (!std::isfinite(track.bpm) || track.bpm < 30.0 || track.bpm > 300.0) track.bpm = 120.0;
                 if (track.meter != 3 && track.meter != 4 && track.meter != 6) track.meter = 4;
                 track.duration = juce::jlimit(0, 3, track.duration);
+                track.scope = juce::jlimit(0, 1, track.scope);
             }
             setChordTrack(track);
             xml->deleteAllChildElementsWithTagName("ChordTrack");

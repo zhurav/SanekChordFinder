@@ -27,7 +27,7 @@ private:
     juce::TableListBox table { "Chord Track", this };
     juce::TextButton loadButton { "LOAD HISTORY" }, deleteButton { "DELETE ROW" };
     juce::TextButton exportButton { "EXPORT MIDI" };
-    juce::ComboBox durationBox, meterBox;
+    juce::ComboBox durationBox, meterBox, scopeBox;
     juce::Label tempo;
     juce::Label status;
     std::unique_ptr<juce::FileChooser> chooser;

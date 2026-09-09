@@ -275,7 +275,7 @@ void SanekChordFinderAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(muted);
     g.setFont(uiFont(11.0f));
     g.drawText("PITCH CLASSES", 32, 556, 200, 18, juce::Justification::centredLeft);
-    g.drawText("v0.6.2 Chord Track", 630, 878, 164, 18, juce::Justification::centredRight);
+    g.drawText("v0.6.3 Chord Track", 630, 878, 164, 18, juce::Justification::centredRight);
 }
 
 void SanekChordFinderAudioProcessorEditor::resized()

@@ -185,10 +185,12 @@ private:
                                      ? stableFramesRequired : extendedStableFramesRequired;
             if (pendingFrames >= requiredFrames && stableChord != pendingChord)
             {
+                const bool firstChord = stableChord < 0;
                 stableChord = pendingChord;
                 changed = true;
                 resultTiming = pendingTiming;
-                resultTiming.seconds = tempoTracker.attackBefore(pendingTiming.seconds);
+                resultTiming.seconds = tempoTracker.attackBefore(pendingTiming.seconds,
+                                                                  firstChord ? 1.0 : 0.45);
                 if (raw.chord == stableChord
                     && ChordMatcher::isBasicMajorOrMinor(stableChord))
                     rememberedChordByRoot[static_cast<size_t>(ChordMatcher::rootOf(stableChord))]

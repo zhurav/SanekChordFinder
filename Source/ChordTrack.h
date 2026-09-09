@@ -17,6 +17,7 @@ struct ChordTrack
     int meter = 4;
     double recordedEndBeat = -1.0;
     int duration = 3; // 0: one beat, 1: half bar, 2: whole bar, 3: until next change.
+    int scope = 0; // 0: detect one repeated loop, 1: keep the full take.
 
     double quarterNotesPerBeat() const { return meter == 6 ? 0.5 : 1.0; }
     double durationBeats() const { return duration == 0 ? 1.0 : (duration == 1 ? meter * 0.5 : meter); }
@@ -31,12 +32,34 @@ struct ChordTrack
     {
         return std::round(std::max(0.0, seconds - origin) * tempo / 60.0);
     }
+    bool keepOneLoop()
+    {
+        if (scope != 0 || rows.size() < 4) return false;
+        for (size_t cycleRows = 2; cycleRows * 2 <= rows.size(); ++cycleRows)
+        {
+            bool same = true;
+            for (size_t i = 0; i < cycleRows; ++i)
+                same &= rows[i].chord == rows[cycleRows + i].chord;
+            if (!same) continue;
+            bool hasDifferentChord = false;
+            for (size_t i = 1; i < cycleRows; ++i)
+                hasDifferentChord |= rows[i].chord != rows[0].chord;
+            const double cycleBeats = rows[cycleRows].beat;
+            if (!hasDifferentChord || cycleBeats < meter) continue;
+            recordedEndBeat = std::max(static_cast<double>(meter),
+                std::round(cycleBeats / meter) * meter);
+            rows.resize(cycleRows);
+            return true;
+        }
+        return false;
+    }
     std::string error() const
     {
         if (rows.empty()) return "Load detected chords to start editing.";
         if (!std::isfinite(bpm) || bpm < 30.0 || bpm > 300.0) return "Tempo must be 30-300 BPM.";
         if (meter != 3 && meter != 4 && meter != 6) return "Choose 3/4, 4/4 or 6/8.";
         if (duration < 0 || duration > 3) return "Choose a note duration.";
+        if (scope < 0 || scope > 1) return "Choose ONE LOOP or FULL TAKE.";
         for (size_t i = 0; i < rows.size(); ++i)
         {
             if (!ChordMatcher::isValid(rows[i].chord)) return "Choose a valid chord in every row.";

@@ -5,7 +5,7 @@ ChordTrackEditor::ChordTrackEditor(SanekChordFinderAudioProcessor& owner)
     : processor(owner), track(owner.getChordTrack())
 {
     for (auto* component : std::initializer_list<juce::Component*> {
-             &table, &loadButton, &deleteButton, &exportButton, &durationBox, &meterBox, &tempo, &status })
+             &table, &loadButton, &deleteButton, &exportButton, &durationBox, &meterBox, &scopeBox, &tempo, &status })
         addAndMakeVisible(component);
     table.getHeader().addColumn("#", 1, 35);
     table.getHeader().addColumn("Start beat", 2, 95);
@@ -21,6 +21,10 @@ ChordTrackEditor::ChordTrackEditor(SanekChordFinderAudioProcessor& owner)
     durationBox.setSelectedId(track.duration + 1, juce::dontSendNotification);
     durationBox.setTooltip("FOLLOW AUDIO sustains each chord until the next change. Other choices cap note length and may leave rests. Changing duration does not move chord starts.");
     durationBox.onChange = [this] { track.duration = durationBox.getSelectedId() - 1; changed(); };
+    scopeBox.addItemList({ "ONE LOOP", "FULL TAKE" }, 1);
+    scopeBox.setSelectedId(track.scope + 1, juce::dontSendNotification);
+    scopeBox.setTooltip("ONE LOOP detects the first repeated chord pattern and exports one cycle. FULL TAKE keeps every detected repetition.");
+    scopeBox.onChange = [this] { track.scope = scopeBox.getSelectedId() - 1; changed(); };
     meterBox.addItem("3/4", 3);
     meterBox.addItem("4/4", 4);
     meterBox.addItem("6/8", 6);
@@ -66,10 +70,11 @@ void ChordTrackEditor::resized()
 {
     loadButton.setBounds(0, 30, 126, 29);
     deleteButton.setBounds(134, 30, 115, 29);
-    tempo.setBounds(260, 30, 130, 29);
-    meterBox.setBounds(400, 30, 70, 29);
-    durationBox.setBounds(480, 30, 125, 29);
-    exportButton.setBounds(615, 30, getWidth() - 615, 29);
+    tempo.setBounds(260, 30, 105, 29);
+    meterBox.setBounds(370, 30, 65, 29);
+    scopeBox.setBounds(440, 30, 100, 29);
+    durationBox.setBounds(545, 30, 100, 29);
+    exportButton.setBounds(650, 30, getWidth() - 650, 29);
     table.setBounds(0, 68, getWidth(), getHeight() - 98);
     status.setBounds(0, getHeight() - 26, getWidth(), 26);
 }
@@ -171,6 +176,7 @@ void ChordTrackEditor::timerCallback()
     refreshTempoLabel();
     meterBox.setSelectedId(track.meter, juce::dontSendNotification);
     durationBox.setSelectedId(track.duration + 1, juce::dontSendNotification);
+    scopeBox.setSelectedId(track.scope + 1, juce::dontSendNotification);
     table.updateContent();
     table.repaint();
     exportButton.setEnabled(track.error().empty() && !choosing);
@@ -203,17 +209,23 @@ void ChordTrackEditor::loadHistory()
     track.bpm = detectedBpm;
     const auto meterIndex = static_cast<int>(processor.parameters.getRawParameterValue("meter")->load());
     track.meter = meterIndex == 0 ? 3 : (meterIndex == 2 ? 6 : 4);
-    const auto recordedOrigin = processor.getRecordedOrigin();
-    const double origin = locked && recordedOrigin >= 0.0 ? recordedOrigin : history.front().seconds;
+    // The first accepted chord is the beginning of the exported clip. Time spent
+    // waiting before playback must never become silence at the front of the MIDI.
+    const double origin = history.front().seconds;
     const double end = std::max(0.0, processor.getRecordedEndSeconds() - origin) * track.bpm / 60.0;
     track.recordedEndBeat = std::ceil(end / track.meter) * track.meter;
     track.rows.clear();
     for (const auto& event : history)
         if (ChordMatcher::isValid(event.chord) && std::isfinite(event.seconds))
             track.rows.push_back({ event.chord, ChordTrack::quantize(event.seconds, origin, track.bpm) });
+    const bool loopFound = track.keepOneLoop();
     meterBox.setSelectedId(track.meter, juce::dontSendNotification);
     table.deselectAllRows();
     changed();
+    if (track.scope == 0)
+        status.setText(loopFound ? "Repeated chord pattern found: loaded one loop from beat 1."
+                                 : "No complete repetition found yet. Loaded the available take from beat 1.",
+                       juce::dontSendNotification);
 }
 
 void ChordTrackEditor::exportMidi()

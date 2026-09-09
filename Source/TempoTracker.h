@@ -104,7 +104,7 @@ public:
         return state;
     }
 
-    double attackBefore(double seconds) const noexcept
+    double attackBefore(double seconds, double searchSeconds = 0.45) const noexcept
     {
         if (!std::isfinite(seconds) || seconds < 0.0) return seconds;
         float strongest = 3.0f;
@@ -114,7 +114,7 @@ public:
         {
             const double time = (static_cast<double>(onsetFrameCount) - age - 1.0) / envelopeRate;
             if (time > seconds) continue;
-            if (time < seconds - 0.45) break;
+            if (time < seconds - searchSeconds) break;
             const float value = onsetAgo(age);
             if (value >= strongest) { strongest = value; attack = std::max(0.0, time - 0.01); }
         }
