@@ -138,10 +138,30 @@ int main()
     cleanLoop.recordedEndBeat = 32;
     expect(cleanLoop.keepOneLoop() && cleanLoop.rows.size() == 3 && cleanLoop.recordedEndBeat == 16,
            "clean two-pass loop exports exactly one 4-bar cycle");
+    cleanLoop.duration = 2;
+    cleanLoop.splitHeldChords();
+    expect(cleanLoop.rows.size() == 4 && cleanLoop.rows[2].chord == 16
+        && cleanLoop.rows[2].beat == 8 && cleanLoop.rows[3].chord == 16
+        && cleanLoop.rows[3].beat == 12,
+        "two-bar Em is split into two one-bar Em events");
+    ChordTrack halfBars;
+    halfBars.duration = 1;
+    halfBars.meter = 4;
+    halfBars.rows = {{21,0}, {0,4}};
+    halfBars.recordedEndBeat = 8;
+    halfBars.splitHeldChords();
+    expect(halfBars.rows.size() == 4 && halfBars.rows[1].beat == 2 && halfBars.rows[3].beat == 6,
+           "half-bar mode retriggers held chords every half bar");
+    ChordTrack followed;
+    followed.duration = 3;
+    followed.rows = {{16,0}};
+    followed.recordedEndBeat = 8;
+    followed.splitHeldChords();
+    expect(followed.rows.size() == 1 && followed.endBeat(0) == 8,
+           "follow-audio mode keeps one continuous two-bar chord");
     ChordTrack fullTake;
     fullTake.scope = 1;
-    fullTake.rows = cleanLoop.rows;
-    fullTake.rows.insert(fullTake.rows.end(), {{21,16}, {0,20}, {16,24}});
+    fullTake.rows = {{21,0}, {0,4}, {16,8}, {21,16}, {0,20}, {16,24}};
     expect(!fullTake.keepOneLoop() && fullTake.rows.size() == 6, "full-take mode retains repetitions");
     ChordTrack unfinished;
     unfinished.rows = {{21,0}, {0,4}, {16,8}, {21,16}, {0,20}};

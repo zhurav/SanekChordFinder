@@ -219,11 +219,12 @@ void ChordTrackEditor::loadHistory()
         if (ChordMatcher::isValid(event.chord) && std::isfinite(event.seconds))
             track.rows.push_back({ event.chord, ChordTrack::quantize(event.seconds, origin, track.bpm) });
     const bool loopFound = track.keepOneLoop();
+    track.splitHeldChords();
     meterBox.setSelectedId(track.meter, juce::dontSendNotification);
     table.deselectAllRows();
     changed();
     if (track.scope == 0)
-        status.setText(loopFound ? "Repeated chord pattern found: loaded one loop from beat 1."
+        status.setText(loopFound ? "Loaded one loop from beat 1; held chords were split by the selected length."
                                  : "No complete repetition found yet. Loaded the available take from beat 1.",
                        juce::dontSendNotification);
 }

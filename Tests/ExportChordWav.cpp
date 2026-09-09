@@ -5,13 +5,19 @@
 
 int main(int argc, char** argv)
 {
-    if (argc != 3) { std::cerr << "Usage: ExportChordWav input.wav output.mid\n"; return 2; }
+    if (argc < 3 || argc > 4) { std::cerr << "Usage: ExportChordWav input.wav output.mid [--whole-bar]\n"; return 2; }
     juce::ScopedJuceInitialiser_GUI gui;
     juce::AudioFormatManager formats;
     formats.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(juce::File(argv[1])));
     if (!reader) return 2;
     SanekChordFinderAudioProcessor processor;
+    if (argc == 4 && std::string_view(argv[3]) == "--whole-bar")
+    {
+        auto settings = processor.getChordTrack();
+        settings.duration = 2;
+        processor.setChordTrack(settings);
+    }
     processor.prepareToPlay(reader->sampleRate, 512);
     processor.parameters.getParameter("listening")->setValueNotifyingHost(1.0f);
     processor.parameters.getParameter("chordSet")->setValueNotifyingHost(1.0f);

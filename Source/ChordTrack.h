@@ -53,6 +53,23 @@ struct ChordTrack
         }
         return false;
     }
+    void splitHeldChords()
+    {
+        if (duration == 3 || rows.empty()) return;
+        const auto original = rows;
+        std::vector<ChordTrackRow> split;
+        const double step = durationBeats();
+        for (size_t row = 0; row < original.size(); ++row)
+        {
+            const double boundary = row + 1 < original.size() ? original[row + 1].beat
+                                                               : recordedEndBeat;
+            split.push_back(original[row]);
+            if (!std::isfinite(boundary) || boundary <= original[row].beat) continue;
+            for (double beat = original[row].beat + step; beat < boundary - 0.0001; beat += step)
+                split.push_back({ original[row].chord, beat });
+        }
+        rows = std::move(split);
+    }
     std::string error() const
     {
         if (rows.empty()) return "Load detected chords to start editing.";
