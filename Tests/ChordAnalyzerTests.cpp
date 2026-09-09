@@ -19,20 +19,22 @@ double midiFrequency(int midi)
     return 440.0 * std::pow(2.0, (midi - 69) / 12.0);
 }
 
-int analyseChord(int chord, int inversion)
+int analyseChord(int chord, int inversion, ChordFrame* finalFrame = nullptr)
 {
     ChordAnalyzer analyzer;
     analyzer.prepare(sampleRate);
+    analyzer.setExtendedChords(true);
     juce::AudioBuffer<float> buffer(2, blockSize);
     int detected = -1;
-    const int rootMidi = 48 + chord % 12;
-    std::array<int, 3> notes { rootMidi,
-                               rootMidi + (chord < 12 ? 4 : 3),
-                               rootMidi + 7 };
-    for (int i = 0; i < inversion; ++i)
+    const int tones = ChordMatcher::toneCount(chord);
+    const int rootMidi = (tones == 4 ? 60 : 48) + ChordMatcher::rootOf(chord);
+    std::array<int, 4> notes {};
+    for (int tone = 0; tone < tones; ++tone)
+        notes[static_cast<size_t>(tone)] = rootMidi + ChordMatcher::intervalAt(chord, tone);
+    for (int i = 0; i < inversion && i < tones; ++i)
         notes[static_cast<size_t>(i)] += 12;
 
-    const int totalSamples = static_cast<int>(sampleRate * 1.0);
+    const int totalSamples = static_cast<int>(sampleRate * 1.5);
     for (int start = 0; start < totalSamples; start += blockSize)
     {
         buffer.clear();
@@ -40,11 +42,11 @@ int analyseChord(int chord, int inversion)
         {
             const double time = static_cast<double>(start + sample) / sampleRate;
             float value = 0.0f;
-            for (size_t tone = 0; tone < notes.size(); ++tone)
+            for (int tone = 0; tone < tones; ++tone)
             {
-                const double fundamental = midiFrequency(notes[tone]);
+                const double fundamental = midiFrequency(notes[static_cast<size_t>(tone)]);
                 for (int harmonic = 1; harmonic <= 5; ++harmonic)
-                    value += 0.09f * (1.0f - 0.12f * static_cast<float>(tone))
+                    value += 0.075f
                            * std::sin(2.0 * juce::MathConstants<double>::pi
                                       * fundamental * harmonic * time)
                            / static_cast<float>(harmonic);
@@ -55,9 +57,25 @@ int analyseChord(int chord, int inversion)
         AnalysisTiming timing;
         timing.seconds = static_cast<double>(start) / sampleRate;
         analyzer.process(buffer, 65.0f, timing,
-                         [&detected](const ChordFrame& frame) { detected = frame.chord; });
+                         [&detected, finalFrame](const ChordFrame& frame)
+                         {
+                             detected = frame.chord;
+                             if (finalFrame != nullptr)
+                                 *finalFrame = frame;
+                         });
     }
     return detected;
+}
+
+bool samePitchSet(int first, int second)
+{
+    if (first < 0 || second < 0)
+        return false;
+    for (int pitch = 0; pitch < 12; ++pitch)
+        if (ChordMatcher::containsPitch(first, pitch)
+            != ChordMatcher::containsPitch(second, pitch))
+            return false;
+    return true;
 }
 }
 
@@ -65,16 +83,38 @@ int main()
 {
     try
     {
+        int checked = 0;
         for (int chord = 0; chord < ChordMatcher::chordCount; ++chord)
-            for (int inversion = 0; inversion < 3; ++inversion)
+        {
+            const int quality = ChordMatcher::qualityOf(chord);
+            const int inversions = quality == ChordMatcher::major
+                                || quality == ChordMatcher::minor
+                                 ? ChordMatcher::toneCount(chord) : 1;
+            for (int inversion = 0; inversion < inversions; ++inversion)
             {
-                const int result = analyseChord(chord, inversion);
-                if (result != chord)
+                ChordFrame finalFrame;
+                const int result = analyseChord(chord, inversion, &finalFrame);
+                const bool rootAmbiguousQuality = quality == ChordMatcher::sus2
+                                               || quality == ChordMatcher::sus4
+                                               || quality == ChordMatcher::diminished;
+                const bool accepted = result == chord
+                    || (rootAmbiguousQuality && samePitchSet(result, chord));
+                if (!accepted)
+                {
                     std::cerr << "Expected " << ChordMatcher::name(chord) << " inversion "
-                              << inversion << ", got " << ChordMatcher::name(result) << '\n';
-                require(result == chord, "Time-domain analyzer failed a chord or inversion");
+                              << inversion << ", got " << ChordMatcher::name(result)
+                              << ", alternative " << ChordMatcher::name(finalFrame.alternative)
+                              << ", confidence " << finalFrame.confidence << "\nChroma:";
+                    for (const float value : finalFrame.chroma)
+                        std::cerr << ' ' << value;
+                    std::cerr << '\n';
+                }
+                require(accepted, "Time-domain analyzer failed a chord or inversion");
+                ++checked;
             }
-        std::cout << "PASS: real FFT path for 24 chords and three inversions\n";
+        }
+        std::cout << "PASS: real FFT path for " << checked
+                  << " chord voicings across 96 chord names\n";
 
         ChordAnalyzer analyzer;
         analyzer.prepare(sampleRate);

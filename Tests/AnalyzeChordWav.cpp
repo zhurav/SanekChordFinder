@@ -3,12 +3,13 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <iomanip>
 #include <iostream>
+#include <string_view>
 
 int main(int argc, char** argv)
 {
-    if (argc != 2)
+    if (argc < 2 || argc > 3)
     {
-        std::cerr << "Usage: AnalyzeChordWav <recording.wav>\n";
+        std::cerr << "Usage: AnalyzeChordWav <recording.wav> [--extended]\n";
         return 2;
     }
 
@@ -23,6 +24,7 @@ int main(int argc, char** argv)
 
     ChordAnalyzer analyzer;
     analyzer.prepare(reader->sampleRate);
+    analyzer.setExtendedChords(argc == 3 && std::string_view(argv[2]) == "--extended");
     constexpr int blockSize = 512;
     const int channels = static_cast<int>(std::min<juce::uint64>(2, reader->numChannels));
     juce::AudioBuffer<float> buffer(std::max(1, channels), blockSize);
@@ -42,7 +44,9 @@ int main(int argc, char** argv)
             {
                 lastPrintedChord = frame.chord;
                 std::cout << std::fixed << std::setprecision(2) << frame.timing.seconds << "  "
-                          << ChordMatcher::name(frame.chord) << '\n';
+                          << ChordMatcher::name(frame.chord) << "  "
+                          << std::setprecision(0) << frame.confidence << "%  alt "
+                          << ChordMatcher::name(frame.alternative) << '\n';
             }
         });
         const auto liveTempo = analyzer.getTempoState();

@@ -98,6 +98,17 @@ SanekChordFinderAudioProcessorEditor::SanekChordFinderAudioProcessorEditor(
     meterLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(meterLabel);
 
+    chordSetBox.addItemList({ "TRIADS", "EXTENDED" }, 1);
+    chordSetBox.setTooltip("TRIADS is the most reliable mode. EXTENDED also detects 7, maj7, m7, sus2, sus4 and dim.");
+    addAndMakeVisible(chordSetBox);
+    chordSetAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        processor.parameters, "chordSet", chordSetBox);
+    chordSetLabel.setText("CHORD SET", juce::dontSendNotification);
+    chordSetLabel.setFont(uiFont(11.0f, true));
+    chordSetLabel.setColour(juce::Label::textColourId, muted);
+    chordSetLabel.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(chordSetLabel);
+
     currentChordLabel.setText("--", juce::dontSendNotification);
     currentChordLabel.setFont(uiFont(78.0f, true));
     currentChordLabel.setColour(juce::Label::textColourId, pale);
@@ -111,6 +122,11 @@ SanekChordFinderAudioProcessorEditor::SanekChordFinderAudioProcessorEditor(
     alternativeLabel.setColour(juce::Label::textColourId, muted);
     alternativeLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(alternativeLabel);
+    keyLabel.setFont(uiFont(15.0f, true));
+    keyLabel.setColour(juce::Label::textColourId, violet);
+    keyLabel.setJustificationType(juce::Justification::centred);
+    keyLabel.setTooltip("Estimated key, confidence and the current chord's harmonic degree. The estimate improves as more different chords arrive.");
+    addAndMakeVisible(keyLabel);
     bpmLabel.setFont(uiFont(13.0f, true));
     bpmLabel.setColour(juce::Label::textColourId, cyan);
     bpmLabel.setJustificationType(juce::Justification::centredLeft);
@@ -120,7 +136,7 @@ SanekChordFinderAudioProcessorEditor::SanekChordFinderAudioProcessorEditor(
     historyBox.setReadOnly(true);
     historyBox.setScrollbarsShown(true);
     historyBox.setCaretVisible(false);
-    historyBox.setFont(uiFont(16.0f));
+    historyBox.setFont(uiFont(14.0f));
     historyBox.setColour(juce::TextEditor::backgroundColourId, panel);
     historyBox.setColour(juce::TextEditor::textColourId, pale);
     historyBox.setColour(juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
@@ -134,15 +150,17 @@ SanekChordFinderAudioProcessorEditor::SanekChordFinderAudioProcessorEditor(
         processor.requestNewBar();
         processor.clearHistory();
         displayedEvents.clear();
+        displayedKey = {};
         historyBox.setText("New bar marked. Listening for chords...", false);
     };
     addAndMakeVisible(newBarButton);
 
-    clearButton.setTooltip("Clear the detected chord sequence.");
+    clearButton.setTooltip("Reset the detected sequence and key analysis.");
     clearButton.onClick = [this]
     {
         processor.clearHistory();
         displayedEvents.clear();
+        displayedKey = {};
         historyBox.setText("No chords recorded yet.", false);
     };
     addAndMakeVisible(clearButton);
@@ -185,7 +203,7 @@ void SanekChordFinderAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("CHORD FINDER", 25, 37, 380, 40, juce::Justification::centredLeft);
     g.setColour(muted);
     g.setFont(uiFont(13.0f));
-    g.drawText("CHORDS  /  AUTO TEMPO  /  INTERNAL BARS", 27, 78, 410, 18,
+    g.drawText("CHORDS  /  KEY  /  TEMPO  /  BARS", 27, 78, 350, 18,
                juce::Justification::centredLeft);
 
     g.setColour(panel);
@@ -194,7 +212,7 @@ void SanekChordFinderAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(muted);
     g.setFont(uiFont(12.0f, true));
     g.drawText("CURRENT CHORD", 43, 130, 200, 20, juce::Justification::centredLeft);
-    g.drawText("SEQUENCE", 543, 130, 160, 20, juce::Justification::centredLeft);
+    g.drawText("SEQUENCE / DEGREE", 543, 130, 200, 20, juce::Justification::centredLeft);
 
     const auto confidenceArea = juce::Rectangle<float>(55.0f, 297.0f, 420.0f, 8.0f);
     g.setColour(juce::Colour(0xff31404d));
@@ -244,11 +262,8 @@ void SanekChordFinderAudioProcessorEditor::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff263441));
         g.fillRoundedRectangle(startX + static_cast<float>(i) * width, baseY - 68.0f,
                                width - 7.0f, 68.0f, 3.0f);
-        const int root = displayedChord >= 0 ? displayedChord % 12 : -1;
-        const int third = root >= 0 ? (root + (displayedChord < 12 ? 4 : 3)) % 12 : -1;
-        const int fifth = root >= 0 ? (root + 7) % 12 : -1;
-        g.setColour(static_cast<int>(i) == root || static_cast<int>(i) == third
-                    || static_cast<int>(i) == fifth ? cyan : violet);
+        g.setColour(ChordMatcher::containsPitch(displayedChord, static_cast<int>(i))
+                        ? cyan : violet);
         g.fillRoundedRectangle(startX + static_cast<float>(i) * width, baseY - height,
                                width - 7.0f, height, 3.0f);
         g.setColour(muted);
@@ -258,7 +273,7 @@ void SanekChordFinderAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(muted);
     g.setFont(uiFont(11.0f));
     g.drawText("PITCH CLASSES", 32, 556, 200, 18, juce::Justification::centredLeft);
-    g.drawText("v0.3", 730, 582, 64, 18, juce::Justification::centredRight);
+    g.drawText("v0.5", 730, 582, 64, 18, juce::Justification::centredRight);
 }
 
 void SanekChordFinderAudioProcessorEditor::resized()
@@ -268,7 +283,10 @@ void SanekChordFinderAudioProcessorEditor::resized()
     sensitivityKnob.setBounds(392, 36, 100, 72);
     meterLabel.setBounds(510, 21, 82, 18);
     meterBox.setBounds(510, 44, 82, 29);
+    chordSetLabel.setBounds(592, 79, 88, 18);
+    chordSetBox.setBounds(681, 76, 105, 27);
     currentChordLabel.setBounds(45, 151, 440, 112);
+    keyLabel.setBounds(55, 266, 420, 27);
     confidenceLabel.setBounds(55, 311, 420, 21);
     alternativeLabel.setBounds(55, 332, 420, 20);
     bpmLabel.setBounds(55, 353, 275, 25);
@@ -309,6 +327,25 @@ void SanekChordFinderAudioProcessorEditor::timerCallback()
         juce::dontSendNotification);
     newBarButton.setEnabled(active);
     refreshHistory();
+    if (displayedKey.key >= 0)
+    {
+        juce::String text = "KEY  "
+            + juce::String(KeyDetector::name(displayedKey.key).data()).toUpperCase()
+            + "  " + juce::String(displayedKey.confidence, 0) + "%";
+        if (displayedChord >= 0)
+            text += "     DEGREE  "
+                 + juce::String(KeyDetector::degreeName(displayedKey.key, displayedChord));
+        keyLabel.setText(text, juce::dontSendNotification);
+    }
+    else if (!displayedEvents.empty())
+    {
+        keyLabel.setText("KEY  LEARNING...  " + juce::String(displayedKey.distinctRoots)
+                         + "/3 DIFFERENT CHORDS", juce::dontSendNotification);
+    }
+    else
+    {
+        keyLabel.setText(active ? "KEY  LEARNING..." : "KEY  --", juce::dontSendNotification);
+    }
     repaint();
 }
 
@@ -322,6 +359,11 @@ void SanekChordFinderAudioProcessorEditor::refreshHistory()
         && std::abs(historyBpm - displayedBpm) < 0.25f)
         return;
     displayedEvents = snapshot;
+    std::vector<KeyObservation> observations;
+    observations.reserve(displayedEvents.size());
+    for (const auto& event : displayedEvents)
+        observations.push_back({ event.chord, event.confidence });
+    displayedKey = KeyDetector().analyse(observations);
     historyTempoLocked = displayedTempoLocked;
     historyBpm = displayedBpm;
     if (displayedEvents.empty())
@@ -332,9 +374,14 @@ void SanekChordFinderAudioProcessorEditor::refreshHistory()
     juce::String text;
     const size_t first = displayedEvents.size() > 40 ? displayedEvents.size() - 40 : 0;
     for (size_t i = first; i < displayedEvents.size(); ++i)
-        text << eventPosition(displayedEvents[i]) << "    "
-             << juce::String(ChordMatcher::name(displayedEvents[i].chord).data()) << "    "
-             << juce::String(displayedEvents[i].confidence, 0) << "%\n";
+    {
+        text << eventPosition(displayedEvents[i]) << "  "
+             << juce::String(ChordMatcher::name(displayedEvents[i].chord).data());
+        if (displayedKey.key >= 0)
+            text << "  " << juce::String(
+                KeyDetector::degreeName(displayedKey.key, displayedEvents[i].chord));
+        text << "  " << juce::String(displayedEvents[i].confidence, 0) << "%\n";
+    }
     historyBox.setText(text, false);
     historyBox.moveCaretToEnd();
 }

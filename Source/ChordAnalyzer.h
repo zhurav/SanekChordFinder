@@ -43,6 +43,8 @@ public:
                    ? newSampleRate : 48000.0;
         smoothingAlpha = static_cast<float>(1.0 - std::exp(-hopSize / (sampleRate * 0.12)));
         stableFramesRequired = std::max(6, static_cast<int>(std::ceil(0.36 * sampleRate / hopSize)));
+        extendedStableFramesRequired = std::max(
+            9, static_cast<int>(std::ceil(0.75 * sampleRate / hopSize)));
         noChordFramesRequired = std::max(12, static_cast<int>(std::ceil(sampleRate / hopSize)));
         tempoTracker.prepare(sampleRate);
         reset();
@@ -68,6 +70,7 @@ public:
     }
 
     void setBeatsPerBar(int beats) noexcept { tempoTracker.setBeatsPerBar(beats); }
+    void setExtendedChords(bool enabled) noexcept { extendedChords = enabled; }
     void markNewBar() noexcept { tempoTracker.markNewBar(); }
     TempoState getTempoState() const noexcept { return tempoTracker.getState(); }
 
@@ -138,7 +141,7 @@ private:
                                   * (instantaneousChroma[i] - smoothedChroma[i]);
         }
 
-        const auto raw = matcher.match(smoothedChroma, rmsDb, sensitivity);
+        const auto raw = matcher.match(smoothedChroma, rmsDb, sensitivity, extendedChords);
         const int candidateChord = applyHarmonicMemory(raw, smoothedChroma);
         const int candidateAlternative = candidateChord != raw.chord && raw.chord >= 0
                                        ? raw.chord : raw.alternative;
@@ -158,7 +161,11 @@ private:
         else
         {
             noChordFrames = 0;
-            if (candidateChord == pendingChord)
+            if (candidateChord == pendingChord
+                || (ChordMatcher::samePitchSet(candidateChord, pendingChord)
+                    && (ChordMatcher::qualityOf(candidateChord) == ChordMatcher::sus2
+                        || ChordMatcher::qualityOf(candidateChord) == ChordMatcher::sus4
+                        || ChordMatcher::qualityOf(candidateChord) == ChordMatcher::diminished)))
                 ++pendingFrames;
             else
             {
@@ -167,13 +174,17 @@ private:
                 pendingTiming = timing;
             }
             auto resultTiming = timing;
-            if (pendingFrames >= stableFramesRequired && stableChord != pendingChord)
+            const int requiredFrames = ChordMatcher::isBasicMajorOrMinor(pendingChord)
+                                     ? stableFramesRequired : extendedStableFramesRequired;
+            if (pendingFrames >= requiredFrames && stableChord != pendingChord)
             {
                 stableChord = pendingChord;
                 changed = true;
                 resultTiming = pendingTiming;
-                if (raw.chord == stableChord)
-                    rememberedChordByRoot[static_cast<size_t>(stableChord % 12)] = stableChord;
+                if (raw.chord == stableChord
+                    && ChordMatcher::isBasicMajorOrMinor(stableChord))
+                    rememberedChordByRoot[static_cast<size_t>(ChordMatcher::rootOf(stableChord))]
+                        = stableChord;
             }
 
             const float displayConfidence = candidateChord == stableChord ? candidateConfidence
@@ -193,12 +204,17 @@ private:
     {
         if (raw.chord >= 0)
         {
-            const int root = raw.chord % 12;
+            // Extended chords contain their own defining tone, so never replace
+            // them with a previously heard triad of the same root.
+            if (!ChordMatcher::isBasicMajorOrMinor(raw.chord))
+                return raw.chord;
+
+            const int root = ChordMatcher::rootOf(raw.chord);
             const int remembered = rememberedChordByRoot[static_cast<size_t>(root)];
             if (remembered >= 0 && remembered != raw.chord)
             {
-                const int newThird = (root + (raw.chord < 12 ? 4 : 3)) % 12;
-                const int oldThird = (root + (remembered < 12 ? 4 : 3)) % 12;
+                const int newThird = (root + ChordMatcher::intervalAt(raw.chord, 1)) % 12;
+                const int oldThird = (root + ChordMatcher::intervalAt(remembered, 1)) % 12;
                 const int fifth = (root + 7) % 12;
                 const float reference = std::max(chroma[static_cast<size_t>(root)],
                                                   chroma[static_cast<size_t>(fifth)]);
@@ -260,5 +276,7 @@ private:
     int pendingChord = -1, pendingFrames = 0, noChordFrames = 0, stableChord = -1;
     AnalysisTiming pendingTiming;
     int stableFramesRequired = 9, noChordFramesRequired = 24;
+    int extendedStableFramesRequired = 18;
     bool hasAnalysed = false, hasSmoothedChroma = false;
+    bool extendedChords = false;
 };

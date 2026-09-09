@@ -59,4 +59,5 @@ public:
                 value /= maximum;
         return chroma;
     }
+
 };

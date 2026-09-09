@@ -90,6 +90,7 @@ private:
     std::atomic<float>* listening = nullptr;
     std::atomic<float>* sensitivity = nullptr;
     std::atomic<float>* meter = nullptr;
+    std::atomic<float>* chordSet = nullptr;
     std::atomic<int> currentChord { -1 }, alternativeChord { -1 };
     std::atomic<float> confidence { 0.0f };
     std::array<std::atomic<float>, 12> latestChroma;

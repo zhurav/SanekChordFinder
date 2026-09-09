@@ -10,6 +10,7 @@ SanekChordFinderAudioProcessor::SanekChordFinderAudioProcessor()
     listening = parameters.getRawParameterValue("listening");
     sensitivity = parameters.getRawParameterValue("sensitivity");
     meter = parameters.getRawParameterValue("meter");
+    chordSet = parameters.getRawParameterValue("chordSet");
     for (auto& value : latestChroma)
         value.store(0.0f, std::memory_order_relaxed);
 }
@@ -27,6 +28,9 @@ SanekChordFinderAudioProcessor::createParameters()
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID { "meter", 1 }, "Meter",
         juce::StringArray { "3/4", "4/4", "6/8" }, 1));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID { "chordSet", 1 }, "Chord Set",
+        juce::StringArray { "TRIADS", "EXTENDED" }, 0));
     return layout;
 }
 
@@ -100,6 +104,7 @@ void SanekChordFinderAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         const int meterIndex = static_cast<int>(std::lround(meter->load(std::memory_order_relaxed)));
         const int beats = meterIndex == 0 ? 3 : (meterIndex == 2 ? 6 : 4);
         analyzer.setBeatsPerBar(beats);
+        analyzer.setExtendedChords(chordSet->load(std::memory_order_relaxed) >= 0.5f);
         if (newBarRequested.exchange(false, std::memory_order_acq_rel))
         {
             analyzer.markNewBar();

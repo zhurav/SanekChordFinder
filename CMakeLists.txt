@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(SanekChordFinder VERSION 0.3.0 LANGUAGES C CXX)
+project(SanekChordFinder VERSION 0.5.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -17,6 +17,9 @@ if(SANEKCHORD_TESTS_ONLY)
     add_executable(TempoTrackerTests Tests/TempoTrackerTests.cpp)
     target_include_directories(TempoTrackerTests PRIVATE Source)
     add_test(NAME TempoTracker COMMAND TempoTrackerTests)
+    add_executable(KeyDetectorTests Tests/KeyDetectorTests.cpp)
+    target_include_directories(KeyDetectorTests PRIVATE Source)
+    add_test(NAME KeyDetector COMMAND KeyDetectorTests)
     return()
 endif()
 
@@ -52,7 +55,7 @@ juce_add_plugin(SanekChordFinder
     PLUGIN_MANUFACTURER_CODE Snek
     PLUGIN_CODE SCFd
     PRODUCT_NAME "Sanek Chord Finder"
-    DESCRIPTION "Real-time major and minor chord detector with sequence history"
+    DESCRIPTION "Real-time chord, key, tempo and harmonic-degree analyzer"
     FORMATS VST3
     VST3_CATEGORIES Fx Analyzer
     IS_SYNTH FALSE
@@ -65,6 +68,7 @@ juce_add_plugin(SanekChordFinder
 
 target_sources(SanekChordFinder PRIVATE
     Source/ChordMatcher.h
+    Source/KeyDetector.h
     Source/SpectrumChroma.h
     Source/TempoTracker.h
     Source/ChordAnalyzer.h
