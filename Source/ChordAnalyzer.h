@@ -6,6 +6,7 @@
 #include "TempoTracker.h"
 #include "SpectralPitch.h"
 #include "HarmonicMemory.h"
+#include "ChordContextResolver.h"
 
 struct AnalysisTiming
 {
@@ -73,6 +74,7 @@ public:
 
     void resetChords() noexcept
     {
+        chordContext.reset();
         for (auto& channel : ring) channel.fill(0.0f);
         fftData.fill(0.0f);
         writePosition = 0;
@@ -170,6 +172,7 @@ private:
         for (auto& bin : spectrum) bin = std::sqrt(bin);
         const float rms = static_cast<float>(std::sqrt(squareSum / (fftSize * activeChannels)));
         const float rmsDb = juce::Decibels::gainToDecibels(rms, -120.0f);
+        if (rmsDb <= -65.0f) chordContext.silence(hopSize / sampleRate);
 
         pitch.process(spectrum.data(), static_cast<int>(spectrum.size()), fftSize, sampleRate,
                       hopSize / sampleRate, rmsDb > -65.0f);
@@ -190,15 +193,10 @@ private:
         const auto raw = matcher.match(smoothedChroma, rmsDb, sensitivity, extendedChords);
         const auto instantaneous = matcher.match(instantaneousChroma, rmsDb, sensitivity, extendedChords);
         int candidateChord = applyHarmonicMemory(raw, smoothedChroma);
-        // Chroma alone cannot distinguish Gsus4/Csus2 or Eb6/Cm7.
-        // Prefer the equivalent interpretation rooted at a supported bass.
         const int bass = pitch.bassNote();
-        if (bass >= 0 && ChordMatcher::isValid(candidateChord))
-            for (int quality = 0; quality < (extendedChords ? ChordMatcher::qualityCount : 2); ++quality)
-            {
-                const int rooted = quality * 12 + bass % 12;
-                if (ChordMatcher::samePitchSet(rooted, candidateChord)) { candidateChord = rooted; break; }
-            }
+        const auto resolution = extendedChords ? chordContext.resolve(candidateChord, bass)
+                                               : ChordResolution { candidateChord };
+        candidateChord = resolution.chord;
         const double recentAttack = tempoTracker.attackBefore(timing.seconds, 0.20);
         if (stableOnset >= 0.0 && recentAttack < timing.seconds - 0.001
             && recentAttack > stableOnset + 0.35)
@@ -221,7 +219,7 @@ private:
         if (extendedChords && subset && !subsetReleased)
             candidateChord = stableChord;
         const int candidateAlternative = candidateChord != raw.chord && raw.chord >= 0
-                                       ? raw.chord : raw.alternative;
+                                       ? raw.chord : (resolution.alternative >= 0 ? resolution.alternative : raw.alternative);
         const float candidateConfidence = ChordMatcher::samePitchSet(candidateChord, raw.chord) ? raw.confidence
                                         : (candidateChord >= 0 ? 42.0f : 0.0f);
         bool changed = false;
@@ -241,7 +239,10 @@ private:
             noChordFrames = 0;
             if (candidateChord == pendingChord
                 || ChordMatcher::samePitchSet(candidateChord, pendingChord))
+            {
+                pendingChord = candidateChord;
                 ++pendingFrames;
+            }
             else
             {
                 pendingChord = candidateChord;
@@ -318,6 +319,8 @@ private:
 
             const float displayConfidence = candidateChord == stableChord ? candidateConfidence
                                                         : std::min(candidateConfidence, 35.0f);
+            if (rmsDb > -65.0f && candidateChord == stableChord)
+                chordContext.observe(stableChord, candidateConfidence, hopSize / sampleRate);
             return { stableChord, candidateAlternative, displayConfidence, changed, resultTiming,
                      smoothedChroma, stableBass,
                      rmsDb > -65.0f && candidateChord == stableChord ? hopSize / sampleRate : 0.0 };
@@ -403,6 +406,7 @@ private:
     std::array<float, fftSize / 2 + 1> spectrum {};
     std::array<float, 12> smoothedChroma {};
     HarmonicMemory memory;
+    LiveChordContext chordContext;
     SpectralPitch pitch;
     double analysisSeconds = 0.0;
     int activeChannels = 1, stableBass = -1, pendingBass = -1;

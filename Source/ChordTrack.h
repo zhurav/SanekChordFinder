@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ChordMatcher.h"
+#include "ChordContextResolver.h"
 #include <vector>
 #include <string>
 
@@ -20,6 +21,41 @@ struct ChordTrack
     int duration = 3; // 0: one beat, 1: half bar, 2: whole bar, 3: until next change.
     int scope = 0; // 0: detect one repeated loop, 1: keep the full take.
     bool hostTempoFallback = false;
+
+    // Called only by LOAD HISTORY, before splitting held chords. Never called
+    // by export or manual edits. All neighbours come from the original snapshot.
+    void resolveContext()
+    {
+        const auto original = rows;
+        for (size_t i = 0; i < rows.size(); ++i)
+        {
+            std::array<KeyObservation, 32> observations {};
+            size_t count = 0;
+            const size_t first = i > 8 ? i - 8 : 0;
+            const size_t last = std::min(original.size(), i + 9);
+            for (size_t j = first; j < last; ++j)
+            {
+                if (j == i || ChordContextResolver::candidateCount(original[j].chord) != 1) continue;
+                const double end = j + 1 < original.size() ? original[j + 1].beat : recordedEndBeat;
+                const double seconds = (end - original[j].beat) * 60.0 / bpm;
+                observations[count++] = {original[j].chord, 80.0f, std::clamp(seconds, 0.0, 8.0)};
+            }
+            const auto key = KeyDetector().analyse(observations.data(), count);
+            int previous = -1, next = -1, following = -1;
+            for (size_t j = i; j > 0; --j)
+                if (!ChordMatcher::samePitchSet(original[j - 1].chord, original[i].chord))
+                { previous = original[j - 1].chord; break; }
+            for (size_t j = i + 1; j < original.size(); ++j)
+            {
+                if (ChordMatcher::samePitchSet(original[j].chord, original[i].chord)) continue;
+                if (next < 0) next = original[j].chord;
+                else if (!ChordMatcher::samePitchSet(original[j].chord, next))
+                { following = original[j].chord; break; }
+            }
+            rows[i].chord = ChordContextResolver::resolve(original[i].chord,
+                {original[i].bassNote, key.key, key.confidence, previous, next, following}).chord;
+        }
+    }
 
     double quarterNotesPerBeat() const { return meter == 6 ? 0.5 : 1.0; }
     double durationBeats() const { return duration == 0 ? 1.0 : (duration == 1 ? meter * 0.5 : meter); }

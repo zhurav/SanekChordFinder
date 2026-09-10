@@ -52,14 +52,24 @@ public:
         return isValid(key) ? names[static_cast<size_t>(key)] : std::string_view { "--" };
     }
 
+    static float harmonicFit(int key, int chord) noexcept
+    {
+        return isValid(key) && ChordMatcher::isValid(chord) ? chordFit(key, chord) : 0.0f;
+    }
+
     KeyMatch analyse(const std::vector<KeyObservation>& input) const
     {
-        std::vector<KeyObservation> observations;
-        const size_t first = input.size() > maximumHistory ? input.size() - maximumHistory : 0;
-        observations.reserve(input.size() - first);
+        return analyse(input.data(), input.size());
+    }
+
+    // Bounded storage also permits use by the audio-thread context resolver.
+    KeyMatch analyse(const KeyObservation* input, size_t count) const noexcept
+    {
+        ObservationBuffer observations;
+        const size_t first = count > maximumHistory ? count - maximumHistory : 0;
         std::array<bool, 12> rootsSeen {};
         int distinctRoots = 0;
-        for (size_t i = first; i < input.size(); ++i)
+        for (size_t i = first; i < count; ++i)
         {
             if (!ChordMatcher::isValid(input[i].chord)
                 || !std::isfinite(input[i].durationSeconds) || input[i].durationSeconds <= 0.0)
@@ -143,6 +153,17 @@ public:
 
 private:
     static constexpr size_t maximumHistory = 32;
+    struct ObservationBuffer
+    {
+        std::array<KeyObservation, maximumHistory> data {};
+        size_t count = 0;
+        void push_back(KeyObservation value) noexcept { data[count++] = value; }
+        size_t size() const noexcept { return count; }
+        KeyObservation& back() noexcept { return data[count - 1]; }
+        const KeyObservation& back() const noexcept { return data[count - 1]; }
+        const KeyObservation& front() const noexcept { return data[0]; }
+        const KeyObservation& operator[](size_t i) const noexcept { return data[i]; }
+    };
 
     enum ExpectedQuality { expectedMajor, expectedMinor, expectedDiminished, expectedEither };
 
@@ -222,7 +243,7 @@ private:
         return fit;
     }
 
-    static float scoreKey(int key, const std::vector<KeyObservation>& observations) noexcept
+    static float scoreKey(int key, const ObservationBuffer& observations) noexcept
     {
         float weightedScore = 0.0f;
         float totalWeight = 0.0f;

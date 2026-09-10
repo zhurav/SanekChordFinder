@@ -252,6 +252,7 @@ void ChordTrackEditor::loadHistory()
             else
                 track.rows.push_back({ event.chord, beat, event.bassNote });
         }
+        track.resolveContext();
         track.keepOneLoop();
         track.splitHeldChords();
         meterBox.setSelectedId(track.meter, juce::dontSendNotification);
@@ -294,6 +295,7 @@ void ChordTrackEditor::loadHistory()
             if (!track.rows.empty() && beat == track.rows.back().beat) track.rows.back() = {event.chord, beat, event.bassNote};
             else track.rows.push_back({event.chord, beat, event.bassNote});
         }
+        track.resolveContext();
         track.keepOneLoop();
         track.splitHeldChords();
         meterBox.setSelectedId(track.meter, juce::dontSendNotification);
@@ -325,6 +327,7 @@ void ChordTrackEditor::loadHistory()
                 track.rows.back() = { event.chord, beat, event.bassNote };
             else track.rows.push_back({ event.chord, beat, event.bassNote });
         }
+    track.resolveContext();
     const bool loopFound = track.keepOneLoop();
     track.splitHeldChords();
     meterBox.setSelectedId(track.meter, juce::dontSendNotification);

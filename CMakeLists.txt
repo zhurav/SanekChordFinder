@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(SanekChordFinder VERSION 0.8.1 LANGUAGES C CXX)
+project(SanekChordFinder VERSION 0.9.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -20,6 +20,9 @@ if(SANEKCHORD_TESTS_ONLY)
     add_executable(KeyDetectorTests Tests/KeyDetectorTests.cpp)
     target_include_directories(KeyDetectorTests PRIVATE Source)
     add_test(NAME KeyDetector COMMAND KeyDetectorTests)
+    add_executable(ChordContextTests Tests/ChordContextTests.cpp)
+    target_include_directories(ChordContextTests PRIVATE Source)
+    add_test(NAME ChordContext COMMAND ChordContextTests)
     return()
 endif()
 
@@ -68,6 +71,7 @@ juce_add_plugin(SanekChordFinder
 
 target_sources(SanekChordFinder PRIVATE
     Source/ChordMatcher.h
+    Source/ChordContextResolver.h
     Source/ChordTrack.h
     Source/ChordMidi.h
     Source/ChordTrackEditor.h
