@@ -1,4 +1,5 @@
 #include "KeyDetector.h"
+#include "KeyTimeline.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -79,6 +80,29 @@ void expectDegree(std::string_view keyName, std::string_view chordName,
 
 int main()
 {
+    const std::vector<KeyObservation> held {{0,90,8}, {6,90,0.2}, {7,90,2}, {0,90,8}};
+    if (KeyDetector().analyse(held).key != 0)
+    { ++failures; std::cerr << "A transient F# must not outweigh sustained C major\n"; }
+    std::vector<KeyObservation> changing;
+    for (int repeat = 0; repeat < 6; ++repeat)
+        for (int id : {0,5,7,0}) changing.push_back({id,90,2});
+    const auto steady = KeyTimeline::analyse(changing);
+    if (steady.current.key != 0 || !steady.changes.empty())
+    { ++failures; std::cerr << "Stable C major must not create modulation markers\n"; }
+    changing.push_back({6,90,0.2});
+    for (int repeat = 0; repeat < 2; ++repeat)
+        for (int id : {0,5,7,0}) changing.push_back({id,90,2});
+    if (!KeyTimeline::analyse(changing).changes.empty())
+    { ++failures; std::cerr << "Transient outside the key must not announce modulation\n"; }
+    for (int repeat = 0; repeat < 8; ++repeat)
+        for (int id : {4,9,11,4}) changing.push_back({id,90,2});
+    const auto modulation = KeyTimeline::analyse(changing);
+    if (modulation.current.key != 4 || modulation.changes.size() != 1)
+    {
+        ++failures;
+        std::cerr << "Sustained C-to-E major must confirm exactly one modulation, got "
+                  << modulation.current.key << " / " << modulation.changes.size() << '\n';
+    }
     expectKey("C major cadence", { "C", "F", "G", "C" }, "C major");
     expectKey("A minor loop", { "Am", "F", "C", "G", "Am" }, "A minor");
     expectKey("User guitar progression",
@@ -135,6 +159,18 @@ int main()
     expectDegree("C major", "Cmaj7", "Imaj7");
     expectDegree("C major", "Gsus4", "Vsus4");
     expectDegree("C major", "Bdim", "viidim");
+    expectDegree("C major", "Bm7b5", "vii7b5");
+    expectDegree("C major", "C6", "I6");
+    expectDegree("C major", "Dm6", "ii6");
+    expectDegree("C major", "Cadd9", "Iadd9");
+    expectDegree("C major", "Dmadd9", "iiadd9");
+    expectDegree("C major", "Caug", "Iaug");
+    expectDegree("C major", "Bdim7", "viidim7");
+    expectDegree("C major", "G5", "V5");
+    expectDegree("C major", "G9", "V9");
+    expectDegree("C major", "Cmaj9", "Imaj9");
+    expectDegree("C major", "Dm9", "ii9");
+    expectDegree("C major", "G7sus4", "V7sus4");
 
     if (failures != 0)
         return 1;

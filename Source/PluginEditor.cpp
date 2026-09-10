@@ -100,7 +100,7 @@ SanekChordFinderAudioProcessorEditor::SanekChordFinderAudioProcessorEditor(
     addAndMakeVisible(meterLabel);
 
     chordSetBox.addItemList({ "TRIADS", "EXTENDED" }, 1);
-    chordSetBox.setTooltip("TRIADS is the most reliable mode. EXTENDED also detects 7, maj7, m7, sus2, sus4 and dim.");
+    chordSetBox.setTooltip("TRIADS detects major/minor. EXTENDED enables all 20 types, including 5, aug, m7b5, dim7, 6, m6, add9, madd9, 9, maj9, m9 and 7sus4.");
     addAndMakeVisible(chordSetBox);
     chordSetAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         processor.parameters, "chordSet", chordSetBox);
@@ -133,6 +133,12 @@ SanekChordFinderAudioProcessorEditor::SanekChordFinderAudioProcessorEditor(
     bpmLabel.setColour(juce::Label::textColourId, cyan);
     bpmLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(bpmLabel);
+    tuningLabel.setFont(uiFont(12.0f, true));
+    tuningLabel.setColour(juce::Label::textColourId, violet);
+    tuningLabel.setTooltip("Automatic common tuning offset from audio. Audio and MIDI pitches are not retuned. Calibration restarts estimation; play a sustained clean note or chord.");
+    addAndMakeVisible(tuningLabel);
+    addAndMakeVisible(calibrateButton);
+    calibrateButton.onClick = [this] { processor.requestTuningCalibration(); };
 
     historyBox.setMultiLine(true);
     historyBox.setReadOnly(true);
@@ -275,7 +281,7 @@ void SanekChordFinderAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(muted);
     g.setFont(uiFont(11.0f));
     g.drawText("PITCH CLASSES", 32, 556, 200, 18, juce::Justification::centredLeft);
-    g.drawText("v0.6.4 Chord Track", 630, 878, 164, 18, juce::Justification::centredRight);
+    g.drawText("v0.8.1 Chord Track", 630, 878, 164, 18, juce::Justification::centredRight);
 }
 
 void SanekChordFinderAudioProcessorEditor::resized()
@@ -293,6 +299,8 @@ void SanekChordFinderAudioProcessorEditor::resized()
     alternativeLabel.setBounds(55, 332, 420, 20);
     bpmLabel.setBounds(55, 353, 275, 25);
     newBarButton.setBounds(350, 350, 125, 31);
+    tuningLabel.setBounds(27, 413, 308, 28);
+    calibrateButton.setBounds(337, 413, 168, 28);
     historyBox.setBounds(541, 157, 238, 335);
     clearButton.setBounds(541, 510, 90, 31);
     copyButton.setBounds(642, 510, 137, 31);
@@ -305,7 +313,7 @@ void SanekChordFinderAudioProcessorEditor::timerCallback()
     listeningButton.setButtonText(active ? "LISTENING" : "START LISTENING");
     listeningButton.setColour(juce::ToggleButton::tickColourId, active ? cyan : muted);
     displayedChord = active ? processor.getCurrentChord() : -1;
-    currentChordLabel.setText(active ? juce::String(ChordMatcher::name(displayedChord).data()) : "--",
+    currentChordLabel.setText(active ? juce::String(ChordTrack::name(displayedChord, processor.getCurrentBass())) : "--",
                               juce::dontSendNotification);
     displayedConfidence = active ? processor.getConfidence() : 0.0f;
     confidenceLabel.setText(displayedChord >= 0 ? "CONFIDENCE  " + juce::String(displayedConfidence, 0) + "%"
@@ -330,6 +338,12 @@ void SanekChordFinderAudioProcessorEditor::timerCallback()
             + (hasLiveTempo ? "   " + juce::String(processor.getLiveTempoConfidence(), 0) + "%" : "   LAST HEARD")
         : (active ? "AUTO BPM  LISTENING FOR RHYTHM..." : "AUTO BPM  --"), juce::dontSendNotification);
     newBarButton.setEnabled(active);
+    calibrateButton.setEnabled(active);
+    const double cents = processor.getTuningCents();
+    tuningLabel.setText(active && processor.isTuningReady()
+        ? "A = " + juce::String(440.0 * std::exp2(cents / 1200.0), 1) + " Hz   "
+            + (cents >= 0.0 ? "+" : "") + juce::String(cents, 1) + " cents"
+        : (active ? "TUNING  LEARNING..." : "TUNING  --"), juce::dontSendNotification);
     refreshHistory();
     if (displayedKey.key >= 0)
     {
@@ -358,7 +372,9 @@ void SanekChordFinderAudioProcessorEditor::refreshHistory()
     const auto snapshot = processor.getHistorySnapshot();
     if (snapshot.size() == displayedEvents.size()
         && (snapshot.empty() || (snapshot.back().chord == displayedEvents.back().chord
-                                 && snapshot.back().seconds == displayedEvents.back().seconds))
+                                 && snapshot.back().seconds == displayedEvents.back().seconds
+                                 && snapshot.back().bassNote == displayedEvents.back().bassNote
+                                 && std::floor(snapshot.back().durationSeconds) == std::floor(displayedEvents.back().durationSeconds)))
         && historyTempoLocked == displayedTempoLocked
         && std::abs(historyBpm - displayedBpm) < 0.25f)
         return;
@@ -366,8 +382,9 @@ void SanekChordFinderAudioProcessorEditor::refreshHistory()
     std::vector<KeyObservation> observations;
     observations.reserve(displayedEvents.size());
     for (const auto& event : displayedEvents)
-        observations.push_back({ event.chord, event.confidence });
-    displayedKey = KeyDetector().analyse(observations);
+        observations.push_back({ event.chord, event.confidence, event.durationSeconds });
+    const auto timeline = KeyTimeline::analyse(observations);
+    displayedKey = timeline.current;
     historyTempoLocked = displayedTempoLocked;
     historyBpm = displayedBpm;
     if (displayedEvents.empty())
@@ -379,12 +396,27 @@ void SanekChordFinderAudioProcessorEditor::refreshHistory()
     const size_t first = displayedEvents.size() > 40 ? displayedEvents.size() - 40 : 0;
     for (size_t i = first; i < displayedEvents.size(); ++i)
     {
+        int eventKey = timeline.initialKey;
+        for (const auto& change : timeline.changes)
+        {
+            if (change.observation <= i) eventKey = change.key;
+            if (change.observation == i)
+                text << eventPosition(displayedEvents[i]) << " KEY CHANGE -> "
+                     << juce::String(KeyDetector::name(change.key).data()) << "\n";
+        }
         text << eventPosition(displayedEvents[i]) << "  "
-             << juce::String(ChordMatcher::name(displayedEvents[i].chord).data());
-        if (displayedKey.key >= 0)
+             << juce::String(ChordTrack::name(displayedEvents[i].chord, displayedEvents[i].bassNote));
+        if (displayedEvents[i].bar > 0)
+        {
+            text << "  ";
+            for (int tone = 0; tone < ChordMatcher::toneCount(displayedEvents[i].chord); ++tone)
+                text << juce::String(ChordTrack::toneName(displayedEvents[i].chord, tone)) << " ";
+        }
+        else if (eventKey >= 0)
             text << "  " << juce::String(
-                KeyDetector::degreeName(displayedKey.key, displayedEvents[i].chord));
-        text << "  " << juce::String(displayedEvents[i].confidence, 0) << "%\n";
+                KeyDetector::degreeName(eventKey, displayedEvents[i].chord));
+        if (displayedEvents[i].bar <= 0) text << "  " << juce::String(displayedEvents[i].confidence, 0) << "%";
+        text << "\n";
     }
     historyBox.setText(text, false);
     historyBox.moveCaretToEnd();
@@ -406,7 +438,7 @@ juce::String SanekChordFinderAudioProcessorEditor::buildSequence() const
                 result << "| ";
             currentBar = position.bar;
         }
-        result << juce::String(ChordMatcher::name(event.chord).data()) << " ";
+        result << juce::String(ChordTrack::name(event.chord, event.bassNote)) << " ";
     }
     result << "|";
     return result;
@@ -414,6 +446,9 @@ juce::String SanekChordFinderAudioProcessorEditor::buildSequence() const
 
 juce::String SanekChordFinderAudioProcessorEditor::eventPosition(const ChordEvent& event) const
 {
+    if (event.bar > 0)
+        return "BAR " + juce::String(event.bar)
+            + (event.beat > 1.0f ? "." + juce::String(event.beat, 0) : juce::String());
     const auto position = processor.getInternalPosition(event.seconds);
     if (position.bar > 0 && position.beat > 0)
         return juce::String(position.bar) + "." + juce::String(position.beat);

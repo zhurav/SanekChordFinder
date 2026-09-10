@@ -40,7 +40,9 @@ void SanekChordFinderAudioProcessor::prepareToPlay(double rate, int maximumBlock
     sampleRateHz = std::isfinite(rate) && rate > 0.0 ? rate : 48000.0;
     listeningSamples = 0;
     analyzer.prepare(sampleRateHz);
+    loopCapture.reset();
     wasListening = false;
+    hostTimelineActive = false;
     currentChord.store(-1, std::memory_order_relaxed);
     alternativeChord.store(-1, std::memory_order_relaxed);
     confidence.store(0.0f, std::memory_order_relaxed);
@@ -79,6 +81,10 @@ void SanekChordFinderAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         clearHistory();
         recordedBpm.store(0.0);
         exportBpm.store(0.0);
+        hostGridBpm.store(0.0);
+        hostEndPpq.store(-1.0);
+        lastHistoryBar = -1;
+        hostTimelineActive = false;
         recordedEndSeconds.store(0.0);
         recordedOrigin.store(-1.0);
         lastHeardBpm.store(0.0f);
@@ -112,6 +118,8 @@ void SanekChordFinderAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
 
     if (active)
     {
+        if (tuningCalibrationRequested.exchange(false)) analyzer.calibrateTuning();
+        if (resetLoopRequested.exchange(false)) loopCapture.reset();
         const int meterIndex = static_cast<int>(std::lround(meter->load(std::memory_order_relaxed)));
         const int beats = meterIndex == 0 ? 3 : (meterIndex == 2 ? 6 : 4);
         analyzer.setBeatsPerBar(beats);
@@ -122,7 +130,80 @@ void SanekChordFinderAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
             tempoOriginSeconds.store(analyzer.getTempoState().originSeconds,
                                      std::memory_order_relaxed);
         }
-        const auto timing = readTiming();
+        auto timing = readTiming();
+        const bool hadHostLoop = captureHostLoop;
+        captureHostLoop = false;
+        if (auto* hostPlayHead = getPlayHead())
+            if (const auto position = hostPlayHead->getPosition())
+            {
+                if (position->getIsPlaying())
+                    if (const auto ppq = position->getPpqPosition())
+                        if (const auto hostBpm = position->getBpm())
+                            if (std::isfinite(*ppq) && *ppq >= 0.0 && *ppq < 10000000.0
+                                && std::isfinite(*hostBpm) && *hostBpm > 0.0 && *hostBpm <= 1000.0)
+                            {
+                                timing.ppq = *ppq;
+                                timing.bpm = *hostBpm;
+                                int numerator = beats, denominator = beats == 6 ? 8 : 4;
+                                if (const auto signature = position->getTimeSignature())
+                                    if (signature->numerator > 0 && signature->numerator <= 64
+                                        && signature->denominator > 0 && signature->denominator <= 64)
+                                    { numerator = signature->numerator; denominator = signature->denominator; }
+                                timing.hostDenominator = denominator;
+                                hostGridMeter.store(denominator == 4 && (numerator == 3 || numerator == 4)
+                                    ? numerator : (denominator == 8 && numerator == 6 ? 6 : 0));
+                                timing.hostBarLength = numerator * 4.0 / denominator;
+                                timing.hostBarStart = std::floor(*ppq / timing.hostBarLength) * timing.hostBarLength;
+                                if (const auto start = position->getPpqPositionOfLastBarStart())
+                                    if (std::isfinite(*start) && *start <= *ppq && *ppq - *start < timing.hostBarLength)
+                                        timing.hostBarStart = *start;
+                                timing.hostBarNumber = static_cast<int>(std::floor(timing.hostBarStart / timing.hostBarLength)) + 1;
+                                if (const auto bar = position->getBarCount())
+                                    if (*bar >= 0 && *bar < 10000000) timing.hostBarNumber = static_cast<int>(*bar) + 1;
+                                timing.updateBar();
+                                hostGridBpm.store(*hostBpm);
+                            }
+                if (const auto ppq = position->getPpqPosition())
+                    if (const auto points = position->getLoopPoints())
+                        if (position->getIsLooping() && std::isfinite(*ppq)
+                            && std::isfinite(points->ppqStart) && std::isfinite(points->ppqEnd)
+                            && points->ppqEnd > points->ppqStart
+                            && points->ppqEnd - points->ppqStart <= 50000.0)
+                        {
+                            const auto hostBpm = position->getBpm();
+                            if (hostBpm && std::isfinite(*hostBpm) && *hostBpm > 0.0)
+                            {
+                                // Host tempo interpolates PPQ only. It never enters TempoTracker.
+                                const bool transportPlaying = position->getIsPlaying();
+                                timing.ppq = transportPlaying ? *ppq : -1.0;
+                                timing.bpm = *hostBpm;
+                                captureLoopStart = points->ppqStart;
+                                captureHostLoop = true;
+                                if (loopCapture.begin(transportPlaying, *ppq, points->ppqStart, points->ppqEnd,
+                                    buffer.getNumSamples() / sampleRateHz * *hostBpm / 60.0, *hostBpm, hostGridMeter.load()))
+                                {
+                                    analyzer.resetChords();
+                                    lastHistoryChord.store(-1);
+                                    currentChord.store(-1);
+                                    alternativeChord.store(-1);
+                                    confidence.store(0.0f);
+                                    for (auto& value : latestChroma) value.store(0.0f);
+                                }
+                            }
+                        }
+            }
+        if (hadHostLoop && !captureHostLoop) loopCapture.reset();
+        const bool timelineActive = timing.ppq >= 0.0;
+        const double blockBeats = buffer.getNumSamples() / sampleRateHz * timing.bpm / 60.0;
+        if (!captureHostLoop && (timelineActive != hostTimelineActive
+            || (timelineActive && std::abs(timing.ppq - expectedHostPpq) > std::max(0.002,blockBeats * 2.0))))
+        {
+            analyzer.resetChords();
+            lastHistoryChord.store(-1);
+            lastHistoryBar = -1;
+        }
+        hostTimelineActive = timelineActive;
+        expectedHostPpq = timing.ppq + blockBeats;
         for (int sample = buffer.getNumSamples() - 1; sample >= 0; --sample)
         {
             bool audible = false;
@@ -131,12 +212,19 @@ void SanekChordFinderAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
             if (audible)
             {
                 recordedEndSeconds.store((static_cast<double>(listeningSamples) + sample + 1.0) / sampleRateHz);
+                if (timing.ppq >= 0.0)
+                    hostEndPpq.store(timing.ppq + (sample + 1.0) / sampleRateHz * timing.bpm / 60.0);
                 break;
             }
         }
+        // Listening controls live analysis. Transport only controls loop capture:
+        // guitar monitoring must work while the host is stopped.
         analyzer.process(buffer, sensitivity->load(std::memory_order_relaxed), timing,
                          [this](const ChordFrame& frame) noexcept { receiveFrame(frame); });
+        if (captureHostLoop) loopCapture.finishBlock();
         listeningSamples += buffer.getNumSamples();
+        tuningCents.store(static_cast<float>(analyzer.getTuningCents()));
+        tuningReady.store(analyzer.isTuningReady());
         const auto tempo = analyzer.getTempoState();
         exportBpm.store(tempo.exportBpm);
         liveBpm.store(tempo.estimatedBpm, std::memory_order_relaxed);
@@ -192,16 +280,35 @@ InternalGridPosition SanekChordFinderAudioProcessor::getInternalPosition(double 
 void SanekChordFinderAudioProcessor::receiveFrame(const ChordFrame& frame) noexcept
 {
     currentChord.store(frame.chord, std::memory_order_relaxed);
+    currentBass.store(frame.bassNote, std::memory_order_relaxed);
     alternativeChord.store(frame.alternative, std::memory_order_relaxed);
     confidence.store(frame.confidence, std::memory_order_relaxed);
     for (size_t i = 0; i < latestChroma.size(); ++i)
         latestChroma[i].store(frame.chroma[i], std::memory_order_relaxed);
 
-    const bool needsHistoryEvent = frame.changed
+    const double currentBarStart = frame.timing.hostBarStart
+        + (frame.timing.bar - frame.timing.hostBarNumber) * frame.timing.hostBarLength;
+    const bool repeatedBar = frame.chord >= 0 && frame.audibleSeconds > 0.0
+        && frame.timing.bar > 0 && frame.timing.bar != lastHistoryBar
+        && frame.timing.ppq - currentBarStart >= std::min(frame.timing.hostBarLength * 0.5, frame.timing.bpm / 60.0 * 0.8);
+    const bool needsHistoryEvent = frame.changed || repeatedBar
         || lastHistoryChord.load(std::memory_order_relaxed) < 0;
-    if (needsHistoryEvent && frame.chord >= 0
-        && lastHistoryChord.exchange(frame.chord, std::memory_order_relaxed) != frame.chord)
+    if (needsHistoryEvent && frame.chord >= 0 && frame.bassNote >= 0
+        && lastHistoryChord.load(std::memory_order_relaxed) == frame.chord
+        && lastHistoryBass.load(std::memory_order_relaxed) < 0)
     {
+        const auto count = historyCount.load(std::memory_order_relaxed);
+        if (count > historyStart.load(std::memory_order_relaxed))
+            history[static_cast<size_t>((count - 1) % historyCapacity)].bassNote.store(frame.bassNote);
+        lastHistoryBass.store(frame.bassNote);
+        if (captureHostLoop) loopCapture.add(frame.chord, frame.timing.ppq - captureLoopStart, frame.bassNote);
+    }
+    if (needsHistoryEvent && frame.chord >= 0
+        && (lastHistoryChord.load(std::memory_order_relaxed) != frame.chord
+            || lastHistoryBass.load(std::memory_order_relaxed) != frame.bassNote || repeatedBar))
+    {
+        lastHistoryChord.store(frame.chord, std::memory_order_relaxed);
+        lastHistoryBass.store(frame.bassNote, std::memory_order_relaxed);
         double eventSeconds = frame.timing.seconds;
         if (alignNextChordToBarOrigin.load(std::memory_order_relaxed))
         {
@@ -212,8 +319,23 @@ void SanekChordFinderAudioProcessor::receiveFrame(const ChordFrame& frame) noexc
                 alignNextChordToBarOrigin.store(false, std::memory_order_relaxed);
             }
         }
-        pushHistory({ frame.chord, frame.confidence, eventSeconds, frame.timing.ppq,
-                      frame.timing.bar, frame.timing.beat });
+        const bool held = repeatedBar && !frame.changed;
+        const double eventPpq = held ? currentBarStart : frame.timing.ppq;
+        if (held) eventSeconds -= (frame.timing.ppq - eventPpq) * 60.0 / frame.timing.bpm;
+        pushHistory({ frame.chord, frame.confidence, eventSeconds, eventPpq,
+                      frame.timing.bar, held ? 1.0f : frame.timing.beat, frame.bassNote });
+        lastHistoryBar = frame.timing.bar;
+        if (captureHostLoop)
+            loopCapture.add(frame.chord, frame.timing.ppq - captureLoopStart, frame.bassNote);
+    }
+    const auto count = historyCount.load(std::memory_order_relaxed);
+    if (frame.chord >= 0 && frame.audibleSeconds > 0.0
+        && count > historyStart.load(std::memory_order_relaxed))
+    {
+        auto& slot = history[static_cast<size_t>((count - 1) % historyCapacity)];
+        if (slot.chord.load(std::memory_order_relaxed) == frame.chord)
+            slot.durationSeconds.store(slot.durationSeconds.load(std::memory_order_relaxed)
+                                       + frame.audibleSeconds, std::memory_order_relaxed);
     }
 }
 
@@ -228,6 +350,8 @@ void SanekChordFinderAudioProcessor::pushHistory(const ChordEvent& event) noexce
     const auto index = historyCount.load(std::memory_order_relaxed);
     auto& slot = history[static_cast<size_t>(index % historyCapacity)];
     slot.chord.store(event.chord, std::memory_order_relaxed);
+    slot.bassNote.store(event.bassNote, std::memory_order_relaxed);
+    slot.durationSeconds.store(event.durationSeconds, std::memory_order_relaxed);
     slot.confidence.store(event.confidence, std::memory_order_relaxed);
     slot.seconds.store(event.seconds, std::memory_order_relaxed);
     slot.ppq.store(event.ppq, std::memory_order_relaxed);
@@ -263,7 +387,9 @@ std::vector<ChordEvent> SanekChordFinderAudioProcessor::getHistorySnapshot() con
                            slot.seconds.load(std::memory_order_relaxed),
                            slot.ppq.load(std::memory_order_relaxed),
                            slot.bar.load(std::memory_order_relaxed),
-                           slot.beat.load(std::memory_order_relaxed) };
+                           slot.beat.load(std::memory_order_relaxed),
+                           slot.bassNote.load(std::memory_order_relaxed),
+                           slot.durationSeconds.load(std::memory_order_relaxed) };
         if (slot.serial.load(std::memory_order_acquire) == serialBefore)
             result.push_back(event);
     }
@@ -274,6 +400,7 @@ void SanekChordFinderAudioProcessor::clearHistory() noexcept
 {
     historyStart.store(historyCount.load(std::memory_order_acquire), std::memory_order_release);
     lastHistoryChord.store(-1, std::memory_order_relaxed);
+    resetLoopRequested.store(true);
 }
 
 juce::AudioProcessorEditor* SanekChordFinderAudioProcessor::createEditor()
@@ -292,11 +419,13 @@ void SanekChordFinderAudioProcessor::getStateInformation(juce::MemoryBlock& dest
         saved->setAttribute("duration", track.duration);
         saved->setAttribute("recordedEndBeat", track.recordedEndBeat);
         saved->setAttribute("scope", track.scope);
+        saved->setAttribute("hostTempoFallback", track.hostTempoFallback);
         for (const auto& row : track.rows)
         {
             auto* item = saved->createNewChildElement("Chord");
             item->setAttribute("id", row.chord);
             item->setAttribute("beat", row.beat);
+            item->setAttribute("bassNote", row.bassNote);
         }
         copyXmlToBinary(*xml, destination);
     }
@@ -315,6 +444,7 @@ void SanekChordFinderAudioProcessor::setStateInformation(const void* data, int s
                 track.duration = saved->getIntAttribute("duration", 2);
                 track.recordedEndBeat = saved->getDoubleAttribute("recordedEndBeat", -1.0);
                 track.scope = saved->getIntAttribute("scope", 0);
+                track.hostTempoFallback = saved->getBoolAttribute("hostTempoFallback", false);
                 if (!std::isfinite(track.recordedEndBeat) || track.recordedEndBeat > 100004.0)
                     track.recordedEndBeat = -1.0;
                 for (auto* item = saved->getFirstChildElement(); item != nullptr && track.rows.size() < 128;
@@ -324,7 +454,8 @@ void SanekChordFinderAudioProcessor::setStateInformation(const void* data, int s
                     const double beat = item->getDoubleAttribute("beat", -1.0);
                     if (item->hasTagName("Chord") && ChordMatcher::isValid(chord)
                         && std::isfinite(beat) && beat >= 0.0 && beat <= 100000.0)
-                        track.rows.push_back({ chord, std::round(beat) });
+                        track.rows.push_back({ chord, std::round(beat * 2.0) / 2.0,
+                            juce::jlimit(-1, 108, item->getIntAttribute("bassNote", -1)) });
                 }
                 if (!std::isfinite(track.bpm) || track.bpm < 30.0 || track.bpm > 300.0) track.bpm = 120.0;
                 if (track.meter != 3 && track.meter != 4 && track.meter != 6) track.meter = 4;

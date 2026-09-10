@@ -2,6 +2,7 @@
 
 #include "PluginProcessor.h"
 #include "KeyDetector.h"
+#include "KeyTimeline.h"
 #include "ChordTrackEditor.h"
 
 class ChordFinderLookAndFeel final : public juce::LookAndFeel_V4
@@ -42,6 +43,8 @@ private:
     juce::Label alternativeLabel;
     juce::Label keyLabel;
     juce::Label bpmLabel;
+    juce::Label tuningLabel;
+    juce::TextButton calibrateButton { "CALIBRATE TUNING" };
     juce::TextEditor historyBox;
     juce::TextButton newBarButton { "NEW BAR" };
     juce::TextButton clearButton { "RESET" };

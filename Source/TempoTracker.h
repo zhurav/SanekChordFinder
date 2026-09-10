@@ -24,6 +24,8 @@ struct TempoState
 class TempoTracker
 {
 public:
+    static constexpr double minimumBpm = 40.0;
+    static constexpr double maximumBpm = 240.0;
     void prepare(double newSampleRate) noexcept
     {
         sampleRate = std::isfinite(newSampleRate) && newSampleRate > 0.0
@@ -38,6 +40,7 @@ public:
     void reset() noexcept
     {
         onsetHistory.fill(0.0f);
+        rhythmHistory.fill(0.0f);
         dbHistory.fill(-120.0f);
         writePosition = 0;
         onsetFrameCount = 0;
@@ -121,6 +124,19 @@ public:
         return attack;
     }
 
+    bool hasAttackNear(double seconds, double radius = 0.15) const noexcept
+    {
+        if (!std::isfinite(seconds) || seconds < 0.0) return false;
+        const int available = static_cast<int>(std::min<std::uint64_t>(onsetFrameCount, historyCapacity));
+        for (int age = 0; age < available; ++age)
+        {
+            const double time = (static_cast<double>(onsetFrameCount) - age - 1.0) / envelopeRate;
+            if (time < seconds - radius) break;
+            if (time <= seconds + radius && onsetAgo(age) > 6.0f) return true;
+        }
+        return false;
+    }
+
 private:
     static constexpr int historyCapacity = 2048;
     static constexpr int dbHistorySize = 8;
@@ -136,6 +152,11 @@ private:
         while (index < 0)
             index += historyCapacity;
         return onsetHistory[static_cast<size_t>(index % historyCapacity)];
+    }
+
+    float rhythmAgo(int age) const noexcept
+    {
+        return rhythmHistory[static_cast<size_t>((writePosition - 1 - age + historyCapacity) % historyCapacity)];
     }
 
     void processEnvelopeFrame() noexcept
@@ -157,6 +178,9 @@ private:
         const float onset = db > -70.0f ? std::clamp(smoothedDb - previousSmoothed, 0.0f, 20.0f)
                                         : 0.0f;
         onsetHistory[static_cast<size_t>(writePosition)] = onset;
+        // Preserve relative accents for octave selection; the dB-difference
+        // envelope alone makes quiet subdivisions look like strong beats.
+        rhythmHistory[static_cast<size_t>(writePosition)] = onset * std::sqrt(rms);
         writePosition = (writePosition + 1) % historyCapacity;
         ++onsetFrameCount;
         if (onset > 1.0f)
@@ -181,45 +205,111 @@ private:
         if (exportBpm <= 0.0f) exportBpm = bpm;
         if (onsetFrameCount < static_cast<std::uint64_t>(8.0 * envelopeRate)
             || onsetFrameCount - lastOnsetFrame > static_cast<std::uint64_t>(2.0 * envelopeRate)) return;
-        const int available = static_cast<int>(std::min<std::uint64_t>(onsetFrameCount, historyCapacity));
-        float mean = 0.0f;
-        for (int age = 0; age < available; ++age) mean += onsetAgo(age);
-        mean /= static_cast<float>(available);
-        const int minimum = static_cast<int>(std::lround(60.0 * envelopeRate / 160.0));
-        const int maximum = static_cast<int>(std::lround(60.0 * envelopeRate / 80.0));
-        int best = minimum;
-        float score = -1.0f;
-        for (int lag = minimum; lag <= maximum; ++lag)
-        {
-            const float candidate = correlationAtLag(lag, available, mean);
-            if (candidate > score) { score = candidate; best = lag; }
-        }
-        if (score < 0.1f) return;
-        float lag = static_cast<float>(best);
-        if (best > minimum && best < maximum)
-        {
-            const float left = correlationAtLag(best - 1, available, mean);
-            const float right = correlationAtLag(best + 1, available, mean);
-            const float denominator = left - 2.0f * score + right;
-            if (std::abs(denominator) > 1.0e-6f)
-                lag += std::clamp(0.5f * (left - right) / denominator, -0.5f, 0.5f);
-        }
-        exportBpm = static_cast<float>(60.0 * envelopeRate / lag);
+        const auto estimate = estimateTempo(static_cast<int>(std::min<std::uint64_t>(onsetFrameCount, historyCapacity)));
+        if (estimate.correlation >= 0.14f) exportBpm = estimate.tempo;
     }
 
-    float correlationAtLag(int lag, int available, float mean) const noexcept
+    float correlationAtLag(int lag, int available, float mean, bool accented = false) const noexcept
     {
         double product = 0.0, firstEnergy = 0.0, secondEnergy = 0.0;
         for (int age = 0; age < available - lag; ++age)
         {
-            const float first = onsetAgo(age) - mean;
-            const float second = onsetAgo(age + lag) - mean;
+            const float first = (accented ? rhythmAgo(age) : onsetAgo(age)) - mean;
+            const float second = (accented ? rhythmAgo(age + lag) : onsetAgo(age + lag)) - mean;
             product += static_cast<double>(first) * second;
             firstEnergy += static_cast<double>(first) * first;
             secondEnergy += static_cast<double>(second) * second;
         }
         const double denominator = std::sqrt(firstEnergy * secondEnergy);
         return denominator > 1.0e-12 ? static_cast<float>(product / denominator) : 0.0f;
+    }
+
+    struct Estimate { float tempo = 0.0f, correlation = 0.0f; };
+
+    Estimate estimateTempo(int available) const noexcept
+    {
+        float mean = 0.0f, accentMean = 0.0f;
+        for (int age = 0; age < available; ++age)
+        {
+            mean += onsetAgo(age);
+            accentMean += rhythmAgo(age);
+        }
+        mean /= static_cast<float>(std::max(1, available));
+        accentMean /= static_cast<float>(std::max(1, available));
+        const int minimumLag = std::max(2, static_cast<int>(std::lround(60.0 * envelopeRate / maximumBpm)));
+        const int maximumLag = std::min({ available / 2, historyCapacity - 2,
+            static_cast<int>(std::lround(60.0 * envelopeRate / minimumBpm)) });
+        if (maximumLag < minimumLag) return {};
+        std::array<float, historyCapacity> correlations {};
+        std::array<float, historyCapacity> accentCorrelations {};
+        for (int lag = minimumLag; lag <= maximumLag; ++lag)
+        {
+            correlations[static_cast<size_t>(lag)] = correlationAtLag(lag, available, mean);
+            accentCorrelations[static_cast<size_t>(lag)] = correlationAtLag(lag, available, accentMean, true);
+        }
+
+        // One rising envelope makes several adjacent onset frames. Collapse them
+        // before using inter-onset intervals to distinguish tempo octaves.
+        std::array<int, historyCapacity> intervals {};
+        int intervalCount = 0, previous = -1;
+        const int separation = std::max(1, static_cast<int>(0.12 * envelopeRate));
+        for (int age = 1; age < available - 1; ++age)
+            if (onsetAgo(age) >= 3.0f && onsetAgo(age) >= onsetAgo(age - 1)
+                && onsetAgo(age) > onsetAgo(age + 1) && (previous < 0 || age - previous >= separation))
+            {
+                if (previous >= 0) intervals[static_cast<size_t>(intervalCount++)] = age - previous;
+                previous = age;
+            }
+        const auto musicalScore = [&](int lag)
+        {
+            float support = 0.0f;
+            for (int i = 0; i < intervalCount; ++i)
+                support += std::max(0.0f, 1.0f - std::abs(intervals[static_cast<size_t>(i)]
+                    - static_cast<float>(lag)) / (0.12f * lag));
+            // A slower autocorrelation peak may merely skip every other onset;
+            // a doubled tempo may invent beats in the gaps. Prefer actual spacing.
+            const float correlation = correlations[static_cast<size_t>(lag)];
+            // A soft tactus prior breaks weak, syncopated ties. It never excludes
+            // slow/fast tempos and vanishes for clear periodic evidence.
+            const double distance = std::log2((60.0 * envelopeRate / lag) / 120.0) / 0.5;
+            const float prior = static_cast<float>(0.20 * std::exp(-0.5 * distance * distance))
+                              * std::clamp(1.0f - correlation / 0.35f, 0.0f, 1.0f);
+            return 0.35f * correlation + 0.65f * accentCorrelations[static_cast<size_t>(lag)]
+                 + 0.25f * support / std::max(1, intervalCount) + prior;
+        };
+        int bestLag = minimumLag;
+        float bestScore = -2.0f;
+        const auto consider = [&](int lag)
+        {
+            if (lag < minimumLag || lag > maximumLag) return;
+            const float score = musicalScore(lag);
+            if (score > bestScore) { bestScore = score; bestLag = lag; }
+        };
+        for (int lag = minimumLag; lag <= maximumLag; ++lag)
+        {
+            const auto value = correlations[static_cast<size_t>(lag)];
+            if ((lag == minimumLag || value >= correlations[static_cast<size_t>(lag - 1)])
+                && (lag == maximumLag || value >= correlations[static_cast<size_t>(lag + 1)]))
+            {
+                consider(lag);
+                // Explicit half/base/double-tempo hypotheses around each peak.
+                for (const double factor : { 0.5, 2.0 })
+                    for (int offset = -1; offset <= 1; ++offset)
+                        consider(static_cast<int>(std::lround(lag * factor)) + offset);
+            }
+        }
+        const float correlation = correlations[static_cast<size_t>(bestLag)];
+        float refinedLag = static_cast<float>(bestLag);
+        if (bestLag > minimumLag && bestLag < maximumLag)
+        {
+            const float left = correlations[static_cast<size_t>(bestLag - 1)];
+            const float right = correlations[static_cast<size_t>(bestLag + 1)];
+            const float denominator = left - 2.0f * correlation + right;
+            if (denominator < -1.0e-6f)
+                refinedLag += std::clamp(0.5f * (left - right) / denominator, -0.5f, 0.5f);
+        }
+        return { static_cast<float>(std::clamp(60.0 * envelopeRate / refinedLag, minimumBpm, maximumBpm)),
+                 correlation };
     }
 
     void updateTempoEstimate() noexcept
@@ -233,37 +323,9 @@ private:
             pendingEstimates = 0;
             return;
         }
-        float mean = 0.0f;
-        for (int age = 0; age < available; ++age)
-            mean += onsetAgo(age);
-        mean /= static_cast<float>(std::max(1, available));
-
-        const int minimumLag = std::max(2, static_cast<int>(std::lround(60.0 * envelopeRate / 160.0)));
-        const int maximumLag = std::min(available / 2,
-            static_cast<int>(std::lround(60.0 * envelopeRate / 80.0)));
-        int bestLag = minimumLag;
-        float bestCorrelation = -1.0f;
-        for (int lag = minimumLag; lag <= maximumLag; ++lag)
-        {
-            const float correlation = correlationAtLag(lag, available, mean);
-            if (correlation > bestCorrelation)
-            {
-                bestCorrelation = correlation;
-                bestLag = lag;
-            }
-        }
-
-        float refinedLag = static_cast<float>(bestLag);
-        if (bestLag > minimumLag && bestLag < maximumLag)
-        {
-            const float left = correlationAtLag(bestLag - 1, available, mean);
-            const float centre = correlationAtLag(bestLag, available, mean);
-            const float right = correlationAtLag(bestLag + 1, available, mean);
-            const float denominator = left - 2.0f * centre + right;
-            if (std::abs(denominator) > 1.0e-6f)
-                refinedLag += std::clamp(0.5f * (left - right) / denominator, -0.5f, 0.5f);
-        }
-        const float candidate = static_cast<float>(60.0 * envelopeRate / refinedLag);
+        const auto estimate = estimateTempo(available);
+        const float candidate = estimate.tempo;
+        const float bestCorrelation = estimate.correlation;
         const float candidateConfidence = 100.0f
             * std::clamp((bestCorrelation - 0.08f) / 0.25f, 0.0f, 1.0f);
 
@@ -309,6 +371,7 @@ private:
     }
 
     std::array<float, historyCapacity> onsetHistory {};
+    std::array<float, historyCapacity> rhythmHistory {};
     std::array<float, dbHistorySize> dbHistory {};
     double sampleRate = 48000.0;
     double squareSum = 0.0;

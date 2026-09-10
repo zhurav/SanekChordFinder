@@ -8,11 +8,12 @@ class SpectrumChroma
 {
 public:
     static std::array<float, 12> convert(const float* magnitudes, int magnitudeCount,
-                                         int fftSize, double sampleRate) noexcept
+                                         int fftSize, double sampleRate, double a4 = 440.0) noexcept
     {
         std::array<float, 12> chroma {};
         if (magnitudes == nullptr || magnitudeCount <= 1 || fftSize <= 0
-            || !std::isfinite(sampleRate) || sampleRate <= 0.0)
+            || !std::isfinite(sampleRate) || sampleRate <= 0.0
+            || !std::isfinite(a4) || a4 < 400.0 || a4 > 480.0)
             return chroma;
 
         const int firstBin = std::max(1, static_cast<int>(std::ceil(55.0 * fftSize / sampleRate)));
@@ -31,7 +32,7 @@ public:
             const int right = std::min(magnitudeCount - 1, bin + 2);
             const bool localPeak = magnitude > magnitudes[left] && magnitude >= magnitudes[right];
             const float contrastWeight = localPeak ? 1.0f : 0.10f;
-            const double midi = 69.0 + 12.0 * std::log2(frequency / 440.0);
+            const double midi = 69.0 + 12.0 * std::log2(frequency / a4);
             const int nearestMidi = static_cast<int>(std::floor(midi + 0.5));
             const double distance = std::clamp(midi - nearestMidi, -0.5, 0.5);
             const float tuningWeight = static_cast<float>(std::pow(std::cos(distance * pi), 2.0));

@@ -50,11 +50,11 @@ std::vector<float> chordSpectrum(int chord, int inversion)
 {
     std::vector<float> spectrum(fftSize / 2 + 1, 0.001f);
     const int toneCount = ChordMatcher::toneCount(chord);
-    const std::array<float, 4> levels { 1.0f, 0.84f, 0.72f, 1.0f };
+    const std::array<float, 5> levels { 1.0f, 0.84f, 0.72f, 1.0f, 1.0f };
     for (int tone = 0; tone < toneCount; ++tone)
     {
         const int selected = (tone + inversion) % toneCount;
-        const int octaveBase = toneCount == 4 ? 60 : 48;
+        const int octaveBase = toneCount >= 4 ? 60 : 48;
         int midi = octaveBase + ChordMatcher::rootOf(chord)
                  + ChordMatcher::intervalAt(chord, selected);
         while (midi >= octaveBase + 12)
@@ -64,7 +64,7 @@ std::vector<float> chordSpectrum(int chord, int inversion)
         const double fundamental = midiFrequency(midi);
         for (int harmonic = 1; harmonic <= 5; ++harmonic)
             addPeak(spectrum, fundamental * harmonic,
-                    (toneCount == 4 ? 1.0f : levels[static_cast<size_t>(tone)])
+                    (toneCount >= 4 ? 1.0f : levels[static_cast<size_t>(tone)])
                         / static_cast<float>(harmonic));
     }
     return spectrum;
@@ -89,11 +89,8 @@ int main()
                 const auto chroma = SpectrumChroma::convert(spectrum.data(),
                     static_cast<int>(spectrum.size()), fftSize, sampleRate);
                 const auto result = matcher.match(chroma, -18.0f, 65.0f, true);
-                const bool rootAmbiguousQuality = quality == ChordMatcher::sus2
-                                               || quality == ChordMatcher::sus4
-                                               || quality == ChordMatcher::diminished;
                 const bool accepted = result.chord == chord
-                    || (rootAmbiguousQuality && samePitchSet(result.chord, chord));
+                    || samePitchSet(result.chord, chord);
                 if (!accepted)
                 {
                     std::cerr << "Expected " << ChordMatcher::name(chord) << " inversion "
@@ -110,7 +107,7 @@ int main()
             }
         }
         std::cout << "PASS: harmonic spectra for " << checked
-                  << " chord voicings across 96 chord names\n";
+                  << " chord voicings across " << ChordMatcher::chordCount << " chord names\n";
 
         std::vector<float> noise(fftSize / 2 + 1, 1.0f);
         const auto flat = SpectrumChroma::convert(noise.data(), static_cast<int>(noise.size()),

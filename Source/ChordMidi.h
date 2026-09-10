@@ -20,8 +20,8 @@ inline bool write(const ChordTrack& track, juce::OutputStream& output)
     {
         const auto& chord = track.rows[row];
         sequence.addEvent(juce::MidiMessage::textMetaEvent(1,
-            juce::String(ChordMatcher::name(chord.chord).data())), chord.beat * ticksPerBeat);
-        for (const auto note : ChordTrack::notes(chord.chord))
+            juce::String(ChordTrack::name(chord.chord, chord.bassNote))), chord.beat * ticksPerBeat);
+        for (const auto note : ChordTrack::notes(chord.chord, chord.bassNote))
         {
             sequence.addEvent(juce::MidiMessage::noteOn(1, note, static_cast<juce::uint8>(96)),
                               chord.beat * ticksPerBeat);

@@ -7,9 +7,9 @@
 
 int main(int argc, char** argv)
 {
-    if (argc < 2 || argc > 3)
+    if (argc < 2 || argc > 4)
     {
-        std::cerr << "Usage: AnalyzeChordWav <recording.wav> [--extended]\n";
+        std::cerr << "Usage: AnalyzeChordWav <recording.wav> [--extended] [sensitivity 0-100]\n";
         return 2;
     }
 
@@ -24,7 +24,9 @@ int main(int argc, char** argv)
 
     ChordAnalyzer analyzer;
     analyzer.prepare(reader->sampleRate);
-    analyzer.setExtendedChords(argc == 3 && std::string_view(argv[2]) == "--extended");
+    analyzer.setExtendedChords(argc >= 3 && std::string_view(argv[2]) == "--extended");
+    const float sensitivity = argc == 4 ? juce::String(argv[3]).getFloatValue() : 65.0f;
+    if (!std::isfinite(sensitivity) || sensitivity < 0.0f || sensitivity > 100.0f) return 2;
     constexpr int blockSize = 512;
     const int channels = static_cast<int>(std::min<juce::uint64>(2, reader->numChannels));
     juce::AudioBuffer<float> buffer(std::max(1, channels), blockSize);
@@ -38,7 +40,7 @@ int main(int argc, char** argv)
         reader->read(&buffer, 0, samples, position, true, channels > 1);
         AnalysisTiming timing;
         timing.seconds = static_cast<double>(position) / reader->sampleRate;
-        analyzer.process(buffer, 65.0f, timing, [&](const ChordFrame& frame)
+        analyzer.process(buffer, sensitivity, timing, [&](const ChordFrame& frame)
         {
             if (frame.changed && frame.chord >= 0 && frame.chord != lastPrintedChord)
             {

@@ -53,7 +53,7 @@ void roundTrip(const ChordTrack& track)
             expect(!active[message.getNoteNumber()], "common notes end before next chord starts");
             active[message.getNoteNumber()] = true;
             if (chordIndex >= track.rows.size()) { expect(false, "unexpected note"); continue; }
-            const auto notes = ChordTrack::notes(track.rows[chordIndex].chord);
+            const auto notes = ChordTrack::notes(track.rows[chordIndex].chord, track.rows[chordIndex].bassNote);
             expect(message.getNoteNumber() == notes[static_cast<size_t>(noteIndex)], "correct chord tone");
             expect(message.getTimeStamp() == track.rows[chordIndex].beat * 960 * track.quarterNotesPerBeat(), "quantized start tick");
             const auto* off = sequence->getEventPointer(i)->noteOffObject;
@@ -71,6 +71,35 @@ void roundTrip(const ChordTrack& track)
 
 int main()
 {
+    expect(ChordTrack::toneName(24,3) == "Bb" && ChordTrack::toneName(12,1) == "Eb"
+        && ChordTrack::toneName(84,2) == "Gb" && ChordTrack::toneName(20,2) == "D#",
+        "chord tones use harmonic spelling: Bb/Eb/Gb and G#m's D#");
+    expect(ChordTrack::notes(0, 40) == std::vector<int>({40,43,48}), "C/E exact inversion");
+    expect(ChordTrack::notes(0, 43) == std::vector<int>({43,48,52}), "C/G exact inversion");
+    expect(ChordTrack::notes(21, 40) == std::vector<int>({40,45,48}), "Am/E exact inversion");
+    expect(ChordTrack::notes(2, 42) == std::vector<int>({42,45,50}), "D/F# exact inversion");
+    expect(ChordTrack::notes(7, 47) == std::vector<int>({47,50,55}), "G/B exact inversion");
+    expect(ChordTrack::name(0, 40) == "C/E" && ChordTrack::name(0, 36) == "C", "slash chord naming");
+    ChordTrack inversions;
+    inversions.rows = {{0,0,40}, {0,4,43}, {21,8,40}, {2,12,42}, {7,16,47}};
+    inversions.recordedEndBeat = 20;
+    roundTrip(inversions);
+    inversions.duration = 1;
+    inversions.splitHeldChords();
+    expect(inversions.rows[1].bassNote == 40, "held chord splitting retains inversion");
+    roundTrip(inversions);
+    for (int id = 0; id < ChordMatcher::chordCount; ++id)
+        for (int tone = 0; tone < ChordMatcher::toneCount(id); ++tone)
+        {
+            const int bass = 36 + (id % 12 + ChordMatcher::intervalAt(id, tone)) % 12;
+            const auto voiced = ChordTrack::notes(id, bass);
+            expect(!voiced.empty() && voiced.front() == bass, "all inversions retain the selected lowest note");
+            expect(voiced.size() == static_cast<size_t>(ChordMatcher::toneCount(id)), "inversions preserve tone count");
+            for (int pitch = 0; pitch < 12; ++pitch)
+                expect(ChordMatcher::containsPitch(id, pitch)
+                    == std::any_of(voiced.begin(), voiced.end(), [pitch](int note) {return note % 12 == pitch;}),
+                    "all inversions preserve exact chord pitch classes");
+        }
     expect(ChordTrack::quantize(1.24, 1.0, 120.0) == 0.0, "round down");
     expect(ChordTrack::quantize(1.25, 1.0, 120.0) == 1.0, "half beat rounds up");
     expect(ChordTrack::quantize(0.5, 1.0, 120.0) == 0.0, "negative time clamps to start");
@@ -79,12 +108,16 @@ int main()
     expect(ChordTrack::notes(4) == std::vector<int>({52, 56, 59}), "E example");
     expect(ChordTrack::notes(3) == std::vector<int>({51, 55, 58}), "D# example");
     const std::vector<std::vector<int>> intervals {{0,4,7},{0,3,7},{0,4,7,10},{0,4,7,11},
-                                                {0,3,7,10},{0,2,7},{0,5,7},{0,3,6}};
-    for (int chord = 0; chord < 96; ++chord)
+                                                {0,3,7,10},{0,2,7},{0,5,7},{0,3,6},
+                                                {0,4,8},{0,3,6,10},{0,3,6,9},{0,4,7,9},
+                                                {0,3,7,9},{0,4,7,14},{0,3,7,14},{0,7},
+                                                {0,4,7,10,14},{0,4,7,11,14},{0,3,7,10,14},{0,5,7,10}};
+    expect(ChordMatcher::qualityCount == static_cast<int>(intervals.size()), "independent voicing oracle covers every type");
+    for (int chord = 0; chord < ChordMatcher::chordCount; ++chord)
     {
         auto expected = intervals[static_cast<size_t>(chord / 12)];
         for (auto& note : expected) note += 48 + chord % 12;
-        expect(ChordTrack::notes(chord) == expected, "all 96 voicings");
+        expect(ChordTrack::notes(chord) == expected, "all 240 voicings including ninths above the octave");
     }
     for (int meter : {3, 4, 6})
         for (int duration : {0, 1, 2})
@@ -92,7 +125,7 @@ int main()
             ChordTrack track;
             track.meter = meter;
             track.duration = duration;
-            for (int chord = 0; chord < 96; ++chord) track.rows.push_back({chord, chord * 4.0});
+            for (int chord = 0; chord < ChordMatcher::chordCount; ++chord) track.rows.push_back({chord, chord * 4.0});
             roundTrip(track);
         }
     ChordTrack track;
@@ -130,9 +163,7 @@ int main()
     ChordTrack screenshotCase;
     screenshotCase.rows = {{21,0}, {0,56}, {16,59}, {21,67}, {0,71}, {16,76}};
     screenshotCase.recordedEndBeat = 80;
-    expect(screenshotCase.keepOneLoop(), "repeated screenshot progression is recognised as one loop");
-    expect(screenshotCase.rows.size() == 3 && screenshotCase.recordedEndBeat == 68,
-           "one-loop mode removes repeated chord events");
+    expect(!screenshotCase.keepOneLoop(), "matching names with inconsistent timing do not establish a loop");
     ChordTrack cleanLoop;
     cleanLoop.rows = {{21,0}, {0,4}, {16,8}, {21,16}, {0,20}, {16,24}};
     cleanLoop.recordedEndBeat = 32;
@@ -152,6 +183,21 @@ int main()
     halfBars.splitHeldChords();
     expect(halfBars.rows.size() == 4 && halfBars.rows[1].beat == 2 && halfBars.rows[3].beat == 6,
            "half-bar mode retriggers held chords every half bar");
+    ChordTrack halfTriple;
+    halfTriple.duration = 1;
+    halfTriple.meter = 3;
+    halfTriple.rows = {{16, 0}};
+    halfTriple.recordedEndBeat = 6;
+    halfTriple.splitHeldChords();
+    expect(halfTriple.error().empty() && halfTriple.rows.size() == 4
+        && halfTriple.rows[1].beat == 1.5, "half-bar split in 3/4 remains exportable");
+    roundTrip(halfTriple);
+    ChordTrack clipped;
+    clipped.duration = 2;
+    clipped.rows = {{16, 0}, {16, 4}};
+    clipped.recordedEndBeat = 6;
+    expect(clipped.endBeat(1) == 6, "last note cannot extend beyond captured loop end");
+    roundTrip(clipped);
     ChordTrack followed;
     followed.duration = 3;
     followed.rows = {{16,0}};

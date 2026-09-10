@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "ChordAnalyzer.h"
 #include "ChordTrack.h"
+#include "HostLoopCapture.h"
 
 struct ChordEvent
 {
@@ -12,6 +13,8 @@ struct ChordEvent
     double ppq = -1.0;
     int bar = -1;
     float beat = -1.0f;
+    int bassNote = -1;
+    double durationSeconds = 0.0;
 };
 
 struct InternalGridPosition
@@ -48,11 +51,16 @@ public:
     void setStateInformation(const void*, int) override;
 
     int getCurrentChord() const noexcept { return currentChord.load(std::memory_order_relaxed); }
+    int getCurrentBass() const noexcept { return currentBass.load(std::memory_order_relaxed); }
+    float getTuningCents() const noexcept { return tuningCents.load(std::memory_order_relaxed); }
+    bool isTuningReady() const noexcept { return tuningReady.load(std::memory_order_relaxed); }
+    void requestTuningCalibration() noexcept { tuningCalibrationRequested.store(true); }
     int getAlternativeChord() const noexcept { return alternativeChord.load(std::memory_order_relaxed); }
     float getConfidence() const noexcept { return confidence.load(std::memory_order_relaxed); }
     bool isListening() const noexcept { return listening->load(std::memory_order_relaxed) >= 0.5f; }
     std::array<float, 12> getChroma() const noexcept;
     std::vector<ChordEvent> getHistorySnapshot() const;
+    HostLoopCapture::Snapshot getLoopSnapshot() const { return loopCapture.snapshot(); }
     void clearHistory() noexcept;
     void requestNewBar() noexcept;
     float getAutoBpm() const noexcept { return autoBpm.load(std::memory_order_relaxed); }
@@ -71,6 +79,9 @@ public:
     InternalGridPosition getInternalPosition(double seconds) const noexcept;
     double getRecordedBpm() const noexcept { return recordedBpm.load(); }
     double getExportBpm() const noexcept { return exportBpm.load(); }
+    double getHostGridBpm() const noexcept { return hostGridBpm.load(); }
+    double getHostEndPpq() const noexcept { return hostEndPpq.load(); }
+    int getHostGridMeter() const noexcept { return hostGridMeter.load(); }
     double getRecordedEndSeconds() const noexcept { return recordedEndSeconds.load(); }
     double getRecordedOrigin() const noexcept { return recordedOrigin.load(); }
     ChordTrack getChordTrack() const { const juce::ScopedLock lock(trackLock); return chordTrack; }
@@ -85,6 +96,8 @@ private:
     {
         std::atomic<juce::uint64> serial { 0 };
         std::atomic<int> chord { -1 };
+        std::atomic<int> bassNote { -1 };
+        std::atomic<double> durationSeconds { 0.0 };
         std::atomic<float> confidence { 0.0f };
         std::atomic<double> seconds { -1.0 };
         std::atomic<double> ppq { -1.0 };
@@ -98,11 +111,18 @@ private:
     void pushHistory(const ChordEvent&) noexcept;
 
     ChordAnalyzer analyzer;
+    HostLoopCapture loopCapture;
+    std::atomic<bool> resetLoopRequested { false };
+    bool captureHostLoop = false;
+    double captureLoopStart = 0.0;
     std::atomic<float>* listening = nullptr;
     std::atomic<float>* sensitivity = nullptr;
     std::atomic<float>* meter = nullptr;
     std::atomic<float>* chordSet = nullptr;
     std::atomic<int> currentChord { -1 }, alternativeChord { -1 };
+    std::atomic<int> currentBass { -1 }, lastHistoryBass { -1 };
+    std::atomic<float> tuningCents { 0.0f };
+    std::atomic<bool> tuningReady { false }, tuningCalibrationRequested { false };
     std::atomic<float> confidence { 0.0f };
     std::array<std::atomic<float>, 12> latestChroma;
     std::array<HistorySlot, historyCapacity> history;
@@ -119,6 +139,11 @@ private:
     bool wasListening = false;
     std::atomic<double> recordedBpm { 0.0 }, recordedOrigin { -1.0 };
     std::atomic<double> exportBpm { 0.0 };
+    std::atomic<double> hostGridBpm { 0.0 }, hostEndPpq { -1.0 };
+    int lastHistoryBar = -1;
+    std::atomic<int> hostGridMeter {4};
+    bool hostTimelineActive = false;
+    double expectedHostPpq = 0.0;
     std::atomic<double> recordedEndSeconds { 0.0 };
     mutable juce::CriticalSection trackLock;
     ChordTrack chordTrack;

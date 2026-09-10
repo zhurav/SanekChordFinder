@@ -14,6 +14,7 @@ struct KeyObservation
 {
     int chord = -1;
     float confidence = 0.0f;
+    double durationSeconds = 1.0;
 };
 
 struct KeyMatch
@@ -60,9 +61,11 @@ public:
         int distinctRoots = 0;
         for (size_t i = first; i < input.size(); ++i)
         {
-            if (!ChordMatcher::isValid(input[i].chord))
+            if (!ChordMatcher::isValid(input[i].chord)
+                || !std::isfinite(input[i].durationSeconds) || input[i].durationSeconds <= 0.0)
                 continue;
             observations.push_back(input[i]);
+            if (!std::isfinite(observations.back().confidence)) observations.back().confidence = 0.0f;
             const int root = ChordMatcher::rootOf(input[i].chord);
             if (!rootsSeen[static_cast<size_t>(root)])
             {
@@ -127,25 +130,14 @@ public:
         std::string result((isMinor(key) ? minorDegrees : majorDegrees)
                            [static_cast<size_t>(interval)]);
         const int quality = ChordMatcher::qualityOf(chord);
-        if (quality == ChordMatcher::minor || quality == ChordMatcher::minor7
-            || quality == ChordMatcher::diminished)
+        const auto family = ChordMatcher::familyOf(chord);
+        if (family == ChordMatcher::Family::minor || family == ChordMatcher::Family::diminished)
         {
             for (auto& character : result)
                 if (character == 'I' || character == 'V' || character == 'X')
                     character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
         }
-        if (quality == ChordMatcher::dominant7)
-            result += "7";
-        else if (quality == ChordMatcher::major7)
-            result += "maj7";
-        else if (quality == ChordMatcher::minor7)
-            result += "7";
-        else if (quality == ChordMatcher::sus2)
-            result += "sus2";
-        else if (quality == ChordMatcher::sus4)
-            result += "sus4";
-        else if (quality == ChordMatcher::diminished)
-            result += "dim";
+        result += ChordMatcher::definitions[static_cast<size_t>(quality)].degreeSuffix;
         return result;
     }
 
@@ -198,15 +190,15 @@ private:
 
         const int quality = ChordMatcher::qualityOf(chord);
         const auto expected = expectedQuality(key, degree);
-        const bool majorLike = quality == ChordMatcher::major
-                            || quality == ChordMatcher::dominant7
-                            || quality == ChordMatcher::major7;
-        const bool minorLike = quality == ChordMatcher::minor
-                            || quality == ChordMatcher::minor7;
+        const auto family = ChordMatcher::familyOf(chord);
+        const bool majorLike = family == ChordMatcher::Family::major;
+        const bool minorLike = family == ChordMatcher::Family::minor;
         float fit = 0.0f;
-        if (quality == ChordMatcher::sus2 || quality == ChordMatcher::sus4)
+        if (family == ChordMatcher::Family::power)
+            fit = 0.30f; // No third: do not vote for major versus minor.
+        else if (family == ChordMatcher::Family::suspended)
             fit = degree == 0 || degree == 3 || degree == 4 ? 0.95f : 0.55f;
-        else if (quality == ChordMatcher::diminished)
+        else if (family == ChordMatcher::Family::diminished)
             fit = expected == expectedDiminished ? 1.75f : -0.75f;
         else if (expected == expectedEither)
             fit = majorLike || minorLike ? 1.35f : 0.30f;
@@ -216,11 +208,11 @@ private:
         else
             fit = -0.85f;
 
-        if (quality == ChordMatcher::dominant7)
+        if (quality == ChordMatcher::dominant7 || quality == ChordMatcher::dominant9)
             fit += degree == 4 ? 0.55f : -0.15f;
-        else if (quality == ChordMatcher::major7 && expected == expectedMajor)
+        else if ((quality == ChordMatcher::major7 || quality == ChordMatcher::major9) && expected == expectedMajor)
             fit += degree == 0 || degree == 3 ? 0.20f : 0.05f;
-        else if (quality == ChordMatcher::minor7 && expected == expectedMinor)
+        else if ((quality == ChordMatcher::minor7 || quality == ChordMatcher::minor9) && expected == expectedMinor)
             fit += 0.15f;
 
         if (degree == 0)
@@ -241,9 +233,8 @@ private:
             const float recency = 0.78f + 0.22f * static_cast<float>(i) / denominator;
             const float rawConfidence = std::isfinite(observations[i].confidence)
                                       ? observations[i].confidence : 0.0f;
-            const float detection = 0.65f + 0.35f
-                * std::clamp(rawConfidence / 100.0f, 0.0f, 1.0f);
-            const float weight = recency * detection;
+            const float detection = std::clamp(rawConfidence / 100.0f, 0.0f, 1.0f);
+            const float weight = recency * detection * static_cast<float>(observations[i].durationSeconds);
             weightedScore += weight * chordFit(key, observations[i].chord);
             totalWeight += weight;
         }
@@ -253,23 +244,25 @@ private:
         const int firstRoot = ChordMatcher::rootOf(observations.front().chord);
         const int lastRoot = ChordMatcher::rootOf(observations.back().chord);
         if (firstRoot == tonic)
-            score += 0.20f;
+            score += 0.20f * static_cast<float>(std::min(1.0, observations.front().durationSeconds));
         if (lastRoot == tonic)
-            score += 0.42f;
+            score += 0.42f * static_cast<float>(std::min(1.0, observations.back().durationSeconds));
 
-        int tonicCount = 0;
-        int authenticCadences = 0;
+        double tonicDuration = 0.0, totalDuration = 0.0, authenticCadences = 0.0;
         for (size_t i = 0; i < observations.size(); ++i)
         {
             const int root = ChordMatcher::rootOf(observations[i].chord);
+            const double duration = observations[i].durationSeconds
+                                  * std::clamp(observations[i].confidence / 100.0f, 0.0f, 1.0f);
+            totalDuration += duration;
             if (root == tonic)
-                ++tonicCount;
+                tonicDuration += duration;
             if (i > 0 && root == tonic
                 && ChordMatcher::rootOf(observations[i - 1].chord) == dominant)
-                ++authenticCadences;
+                authenticCadences += std::min({1.0, observations[i].durationSeconds,
+                                               observations[i - 1].durationSeconds});
         }
-        score += 0.32f * static_cast<float>(tonicCount)
-               / static_cast<float>(observations.size());
+        score += 0.32f * static_cast<float>(tonicDuration / std::max(0.001, totalDuration));
         score += std::min(0.45f, 0.25f * static_cast<float>(authenticCadences));
         return score;
     }

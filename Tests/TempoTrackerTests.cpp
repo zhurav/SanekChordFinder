@@ -42,21 +42,43 @@ int main()
     try
     {
         for (const double sampleRate : { 44100.0, 48000.0, 96000.0 })
-            for (const float expected : { 90.0f, 120.0f, 150.0f })
+            for (const float expected : { 40.0f, 45.0f, 60.0f, 70.0f, 90.0f, 120.0f, 150.0f, 180.0f, 200.0f, 240.0f })
             {
                 const auto state = runClickTrack(sampleRate, expected, 14.0);
+                if (std::abs(state.bpm - expected) >= 1.5f)
+                    std::cerr << "Expected " << expected << " at " << sampleRate << " got " << state.bpm << '\n';
                 require(state.locked, "Periodic click track did not lock");
                 require(std::abs(state.bpm - expected) < 1.5f,
                         "Tempo estimate is outside tolerance");
+                require(std::abs(state.estimatedBpm - expected) < 1.5f
+                    && std::abs(state.exportBpm - expected) < 1.5f, "Live/export tempo selected wrong octave");
                 require(state.confidence > 40.0f, "Clean click confidence is too low");
                 require(state.bar > 0 && state.beat > 0, "Internal bar position is unavailable");
             }
-        std::cout << "PASS: 90/120/150 BPM at 44.1/48/96 kHz\n";
+        std::cout << "PASS: 40/45/60/70/90/120/150/180/200/240 BPM at 44.1/48/96 kHz\n";
 
         const auto early = runClickTrack(48000.0, 120.0f, 3.1);
         require(!early.locked && std::abs(early.estimatedBpm - 120.0f) < 1.5f,
                 "Audible tempo must be available before grid confirmation");
         std::cout << "PASS: early estimate without manual BPM\n";
+
+        for (const float expected : {70.0f, 90.0f, 120.0f})
+        {
+            TempoTracker accented;
+            accented.prepare(48000.0);
+            const double subdivision = 60.0 * 48000.0 / (expected * 2.0);
+            for (int sample = 0; sample < 48000 * 14; ++sample)
+            {
+                const int index = static_cast<int>(sample / subdivision);
+                const double phase = std::fmod(sample, subdivision);
+                const float amplitude = index % 2 == 0 ? 0.8f : 0.04f;
+                accented.processSample(phase < 576 ? amplitude * static_cast<float>(1.0 - phase / 576) : 0.0005f);
+            }
+            const auto state = accented.getState();
+            std::cout << "ACCENT " << expected << " live " << state.estimatedBpm << " export " << state.exportBpm << '\n';
+            require(std::abs(state.estimatedBpm - expected) < 1.5f
+                && std::abs(state.exportBpm - expected) < 1.5f, "Quiet subdivisions must not double the dominant pulse");
+        }
 
         TempoTracker silence;
         silence.prepare(48000.0);
